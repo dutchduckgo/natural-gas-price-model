@@ -158,14 +158,14 @@ def demonstrate_model_comparison(models, df):
     
     # Display results
     logger.info("Model Comparison Results:")
-    logger.info("=" * 50)
+    logger.info("==================================================")
     
     for model_name, result in results.items():
         metrics = result["metrics"]
         logger.info(f"{model_name}:")
         logger.info(f"  MAE: {metrics['mae_mean']:.4f} ± {metrics['mae_std']:.4f}")
         logger.info(f"  RMSE: {metrics['rmse_mean']:.4f} ± {metrics['rmse_std']:.4f}")
-        logger.info(f"  R²: {metrics.get('r2', 0.0):.4f}")
+        logger.info(f"  R^2: {metrics.get('r2', 0.0):.4f}")
         logger.info(f"  Direction Accuracy: {metrics['direction_accuracy_mean']:.2f}% ± {metrics['direction_accuracy_std']:.2f}%")
         logger.info("")
     
@@ -208,14 +208,14 @@ def demonstrate_feature_importance(models):
         return rf_importance
     except Exception as e:
         logger.warning(f"Feature importance analysis failed: {e}")
-        logger.info("This is expected for some model types - feature importance is available for tree-based models")
+        logger.info("Feature importance may be unavailable for some model types in this demo")
         return pd.DataFrame()
 
 
 def main():
     """Main demonstration function."""
     logger.info("Natural Gas Price Model - Simplified Demonstration")
-    logger.info("=" * 60)
+    logger.info("============================================================")
     
     try:
         # 1. Create sample data
@@ -238,15 +238,15 @@ def main():
         
         # Summary
         logger.info("Demonstration Summary:")
-        logger.info("=" * 30)
-        logger.info(f"✅ Sample data created: {len(df)} samples")
-        logger.info(f"✅ Features engineered: {len(all_features.columns)} columns")
-        logger.info(f"✅ Models trained: {len(models)} models")
-        logger.info(f"✅ Backtesting completed: {len(backtest_metrics)} metrics")
-        logger.info(f"✅ Feature importance analyzed: {len(feature_importance)} features")
+        logger.info("==============================")
+        logger.info(f"Sample data created: {len(df)} samples")
+        logger.info(f"Features engineered: {len(all_features.columns)} columns")
+        logger.info(f"Models trained: {len(models)} models")
+        logger.info(f"Backtesting metrics reported: {len(backtest_metrics)}")
+        logger.info(f"Feature importance features reported: {len(feature_importance)}")
         
-        logger.info("\n🎉 Natural Gas Price Model demonstration completed successfully!")
-        logger.info("\nNext steps:")
+        logger.info("Demonstration completed successfully")
+        logger.info("Next steps:")
         logger.info("1. Replace sample data with real EIA, weather, and power data")
         logger.info("2. Install XGBoost/LightGBM for advanced tree-based models")
         logger.info("3. Implement additional data sources (CME, FERC, etc.)")

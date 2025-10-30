@@ -2,7 +2,7 @@
 
 Thank you for your interest in contributing to the Natural Gas Price Model project! We welcome contributions from the community.
 
-## 🤝 How to Contribute
+## How to Contribute
 
 ### 1. Fork and Clone
 
@@ -69,7 +69,7 @@ git push origin feature/your-feature-name
 3. Fill out the PR template
 4. Submit the PR
 
-## 🎯 Areas for Contribution
+## Areas for Contribution
 
 ### High Priority
 - **Data Sources**: Implement additional data sources (CME, FERC, etc.)
@@ -88,7 +88,7 @@ git push origin feature/your-feature-name
 - **Deployment**: Docker containerization
 - **Monitoring**: Model performance monitoring
 
-## 📝 Pull Request Guidelines
+## Pull Request Guidelines
 
 ### Before Submitting
 - [ ] Code follows the project's style guidelines
@@ -117,7 +117,7 @@ Brief description of changes
 - [ ] Documentation updated
 ```
 
-## 🐛 Reporting Issues
+## Reporting Issues
 
 When reporting issues, please include:
 
@@ -128,7 +128,7 @@ When reporting issues, please include:
 5. **Environment**: OS, Python version, etc.
 6. **Screenshots**: If applicable
 
-## 💡 Feature Requests
+## Feature Requests
 
 When requesting features, please include:
 
@@ -137,7 +137,7 @@ When requesting features, please include:
 3. **Alternatives**: Other solutions you've considered
 4. **Additional Context**: Any other relevant information
 
-## 📚 Development Setup
+## Development Setup
 
 ### Prerequisites
 - Python 3.8+
@@ -164,7 +164,7 @@ pip install -e .
 python -m pytest
 ```
 
-## 🧪 Testing
+## Testing
 
 ### Running Tests
 ```bash
@@ -184,7 +184,7 @@ python -m pytest --cov=src tests/
 - Test both success and failure cases
 - Mock external dependencies
 
-## 📖 Documentation
+## Documentation
 
 ### Code Documentation
 - Use docstrings for all functions and classes
@@ -207,20 +207,20 @@ def calculate_degree_days(self, temp_data: pd.DataFrame, base_temp: float = 65.0
     # Implementation here
 ```
 
-## 🏷️ Release Process
+## Release Process
 
 1. Update version in `config.py`
 2. Update `CHANGELOG.md`
 3. Create release tag
 4. Update documentation
 
-## 📞 Getting Help
+## Getting Help
 
 - **GitHub Issues**: For bugs and feature requests
 - **Discussions**: For questions and general discussion
 - **Email**: For security issues or private matters
 
-## 🙏 Recognition
+## Recognition
 
 Contributors will be recognized in:
 - README.md contributors section

@@ -1,4 +1,4 @@
-# 🔥 Natural Gas Price Model
+# Natural Gas Price Model
 
 [![Python](https://img.shields.io/badge/Python-3.8+-blue.svg)](https://python.org)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
@@ -8,47 +8,47 @@ A comprehensive end-to-end pipeline for predicting U.S. natural gas prices using
 
 > Full system overview: see `docs/ARCHITECTURE.md`.
 
-## 🌟 Overview
+## Overview
 
 This project implements a multi-level modeling approach for U.S. natural gas price prediction:
 
-- **Level 0**: Baseline OLS/Elastic Net models
-- **Level 1**: Tree-based models (XGBoost/LightGBM) with feature engineering  
-- **Level 2**: Deep learning models (LSTM/Temporal Fusion Transformer)
+- Level 0: Baseline OLS/Elastic Net models
+- Level 1: Tree-based models (XGBoost/LightGBM) with feature engineering  
+- Level 2: Deep learning models (LSTM/Temporal Fusion Transformer)
 
-## 📊 Data Sources
+## Data Sources
 
 ### Core Price Data
-- **EIA Open Data API**: Henry Hub spot prices, storage, production
-- **CME Group**: NYMEX futures data
-- **EIA-930**: Hourly electric grid monitor data
+- EIA Open Data API: Henry Hub spot prices, storage, production
+- CME Group: NYMEX futures data
+- EIA-930: Hourly electric grid monitor data
 
 ### Weather & Demand Drivers
-- **NWS/NOAA**: Weather forecasts and observations
-- **CPC**: Degree day data (HDD/CDD)
-- **NOMADS**: GFS weather model data
+- NWS/NOAA: Weather forecasts and observations
+- CPC: Degree day data (HDD/CDD)
+- NOMADS: GFS weather model data
 
 ### Supply & Infrastructure
-- **Baker Hughes**: Rig count data
-- **FERC**: LNG terminal status
-- **DOE/FECM**: LNG export data
+- Baker Hughes: Rig count data
+- FERC: LNG terminal status
+- DOE/FECM: LNG export data
 
-## 🏗️ Project Structure
+## Project Structure
 
 ```
 ├── data/                    # Raw and processed data storage
 ├── src/
 │   ├── data_ingestion/      # API clients and data collectors
 │   ├── feature_engineering/ # Feature creation and transformation
-│   ├── models/             # ML model implementations
-│   ├── evaluation/         # Backtesting and model evaluation
-│   └── pipeline/           # End-to-end pipeline orchestration
-├── notebooks/              # Jupyter notebooks for analysis
-├── docs/                   # Architecture and design docs
-└── tests/                  # Unit tests
+│   ├── models/              # ML model implementations
+│   ├── evaluation/          # Backtesting and model evaluation
+│   └── pipeline/            # End-to-end pipeline orchestration
+├── notebooks/               # Jupyter notebooks for analysis
+├── docs/                    # Architecture and design docs
+└── tests/                   # Unit tests
 ```
 
-## 🚀 Quick Start
+## Quick Start
 
 ### 1. Installation
 
@@ -72,8 +72,8 @@ cp .env.example .env
 ### 3. Run Demo
 
 ```bash
-# Run the complete demonstration
-python demo.py
+# Run a demonstration without extra system dependencies
+python demo_simple.py
 
 # Or explore the Jupyter notebook
 jupyter notebook notebooks/example_usage.ipynb
@@ -89,24 +89,24 @@ python -m src.pipeline.ingest_data
 python -m src.pipeline.train_baseline
 ```
 
-## ✨ Features
+## Features
 
-- **🔗 Multi-source data integration**: EIA, weather, power grid, LNG infrastructure
-- **⚙️ Feature engineering**: Weather derivatives, storage metrics, power burn proxies
-- **📈 Temporal modeling**: Handles forecast horizons and data leakage prevention
-- **🧪 Backtesting framework**: Walk-forward validation with realistic timing
-- **🏭 Production ready**: Modular design with proper error handling and logging
+- Multi-source data integration: EIA, weather, power grid, LNG infrastructure
+- Feature engineering: weather derivatives, storage metrics, power burn proxies
+- Temporal modeling: handles forecast horizons and data leakage prevention
+- Backtesting framework: walk-forward validation with realistic timing
+- Production ready: modular design with proper error handling and logging
 
-## 📈 Model Performance
+## Model Performance
 
 Expected performance benchmarks:
-- **7-day horizon**: MAPE ~8-12%
-- **14-day horizon**: MAPE ~12-18%
-- **30-day horizon**: MAPE ~18-25%
+- 7-day horizon: MAPE ~8-12%
+- 14-day horizon: MAPE ~12-18%
+- 30-day horizon: MAPE ~18-25%
 
-**Key drivers**: HDD/CDD, storage levels, power burn, LNG capacity
+Key drivers: HDD/CDD, storage levels, power burn, LNG capacity
 
-## 🎯 Usage Examples
+## Usage Examples
 
 ### Basic Usage
 
@@ -147,15 +147,15 @@ comparison.add_model("LightGBM", lgb_model)
 results = comparison.compare_models(data)
 ```
 
-## 📚 Documentation
+## Documentation
 
-- **[Architecture & Operations](docs/ARCHITECTURE.md)**: Full technical overview and production guidance
-- **[Implementation Summary](IMPLEMENTATION_SUMMARY.md)**: High-level changes and capabilities
-- **[Example Notebook](notebooks/example_usage.ipynb)**: Step-by-step tutorial
+- Architecture & Operations: `docs/ARCHITECTURE.md`
+- Implementation Summary: `IMPLEMENTATION_SUMMARY.md`
+- Example Notebook: `notebooks/example_usage.ipynb`
 
-## 🤝 Contributing
+## Contributing
 
-We welcome contributions! Please see our [Contributing Guidelines](CONTRIBUTING.md) for details.
+We welcome contributions! Please see our Contributing Guidelines: `CONTRIBUTING.md`.
 
 1. Fork the repository
 2. Create a feature branch (`git checkout -b feature/amazing-feature`)
@@ -163,24 +163,13 @@ We welcome contributions! Please see our [Contributing Guidelines](CONTRIBUTING.
 4. Push to the branch (`git push origin feature/amazing-feature`)
 5. Open a Pull Request
 
-## 📄 License
+## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+This project is licensed under the MIT License - see the `LICENSE` file for details.
 
-## 🙏 Acknowledgments
+## Acknowledgments
 
 - U.S. Energy Information Administration for comprehensive energy data
 - National Weather Service for weather forecasts and observations
 - Climate Prediction Center for degree day data
 - CME Group for futures market data
-
-## 📞 Support
-
-If you have any questions or need help, please:
-- Open an issue on GitHub
-- Check the documentation
-- Review the example notebook
-
----
-
-**⭐ Star this repository if you find it helpful!**
