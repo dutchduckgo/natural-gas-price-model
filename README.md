@@ -6,6 +6,8 @@
 
 A comprehensive end-to-end pipeline for predicting U.S. natural gas prices using multiple data sources and machine learning approaches.
 
+> Full system overview: see `docs/ARCHITECTURE.md`.
+
 ## 🌟 Overview
 
 This project implements a multi-level modeling approach for U.S. natural gas price prediction:
@@ -42,7 +44,7 @@ This project implements a multi-level modeling approach for U.S. natural gas pri
 │   ├── evaluation/         # Backtesting and model evaluation
 │   └── pipeline/           # End-to-end pipeline orchestration
 ├── notebooks/              # Jupyter notebooks for analysis
-├── config/                 # Configuration files
+├── docs/                   # Architecture and design docs
 └── tests/                  # Unit tests
 ```
 
@@ -147,9 +149,9 @@ results = comparison.compare_models(data)
 
 ## 📚 Documentation
 
-- **[Implementation Summary](IMPLEMENTATION_SUMMARY.md)**: Detailed technical overview
+- **[Architecture & Operations](docs/ARCHITECTURE.md)**: Full technical overview and production guidance
+- **[Implementation Summary](IMPLEMENTATION_SUMMARY.md)**: High-level changes and capabilities
 - **[Example Notebook](notebooks/example_usage.ipynb)**: Step-by-step tutorial
-- **[API Documentation](docs/)**: Detailed API reference (coming soon)
 
 ## 🤝 Contributing
 
