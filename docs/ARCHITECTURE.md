@@ -213,7 +213,3 @@ Monitoring:
 - Why Elastic Net baseline? Strong tabular baseline and interpretable coefficients.
 - How is leakage avoided? Calendar-true releases, future covariates restricted to forecast info, rolling-origin evaluation.
 - What horizon is best? 7–14d tend to benefit most from HDD/CDD + storage; 30d needs curve structure and LNG capacity context.
-
----
-
-If you want, we can split this into smaller topic docs (Data Sources, Features, Modeling, Backtesting & Leakage) and link them from the README.
