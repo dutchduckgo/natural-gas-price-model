@@ -1,0 +1,56 @@
+Natural Gas Price Model — Project Pitch 
+
+What this is
+This is a practical, end-to-end system that forecasts U.S. natural gas prices (starting with Henry Hub). It combines market fundamentals (weather, storage, production, power demand, LNG) with time‑series models (linear regression, elastic net, random forests, gradient boosting) to deliver credible 7, 14, and 30‑day price views.
+
+Why it matters
+- Energy prices drive hedging, asset dispatch, procurement, and investment timing.
+- Gas markets are weather- and inventory-sensitive; explainable models beat black boxes when regimes change.
+- With North American LNG capacity expanding through 2029, structural shifts reward fundamentals‑aware forecasting.
+
+What it does
+1) Data you trust: EIA (spot, storage, production), NOAA/CPC (weather), power grid fuel mix/load, LNG capacity/exports.
+2) Signals that move price: HDD/CDD, storage tightness vs 5‑yr average, gas burn proxies, and simple term‑structure spreads.
+3) Models you recognize: time‑series linear regression and elastic net for transparency; random forests and gradient boosting for non‑linear lift; deep sequence models (LSTM/Transformer) available when needed.
+4) Evaluation you can believe: walk‑forward (rolling‑origin) backtests with leakage control, reporting MAE/MAPE/RMSE and up/down hit rates.
+
+Who benefits
+- Traders and risk managers: fundamentals‑driven signals with directional accuracy.
+- Utilities/IPPs: gas‑to‑power planning and procurement with weather and storage context.
+- Industrials: straightforward risk monitoring tied to degree days and inventories.
+- Analysts: a credible baseline with clean, extensible data/feature pipelines.
+
+What makes it credible
+- Authoritative sources (EIA, NOAA/CPC, ISO data) and consistent series IDs.
+- Features reflect economics: HDD/CDD → demand; storage tightness → price level; renewables/load → gas burn.
+- Leakage control: calendar‑true timing (e.g., EIA storage Thursdays), forecast‑only future covariates.
+- Interpretability: linear/elastic‑net coefficients and feature importance (random forest/boosting) before deep learning.
+
+Outputs you get
+- Daily forecasts for 7/14/30‑day horizons.
+- Error and reliability reports (MAE/MAPE/RMSE, directional accuracy) and driver explanations.
+- A schedulable pipeline you can evolve with new data sources and models.
+
+Why now
+- Volatility from LNG growth and extreme weather favors fundamentals‑aware models.
+- Public data access is robust; you can start without expensive data contracts.
+
+How it’s built (brief)
+- Modular pipeline: ingestion → feature signals → models → evaluation → reports.
+- Lightweight analytics storage (DuckDB) keeps it portable and fast.
+- Starts with linear/elastic net and random forests; can add gradient boosting and sequence models on the same signals.
+
+Roadmap (pragmatic)
+- Near term: full EIA‑930/ISO feeds; futures curve spreads and implied vol; stronger weather backfills/forecast surprises.
+- Mid term: quantile forecasts (P10/P50/P90), regime/event flags (maintenance, freeze‑offs), weekly re‑fit aligned to storage.
+- Longer term: live pipeline with alerting; strategy overlays for hedging and dispatch.
+
+How to use it
+- Run the demo for end‑to‑end behavior on sample data.
+- Add API keys, run the pipeline, and generate real signals and forecasts.
+- Review reports and drivers; choose between transparent linear models or higher‑lift tree/sequence models.
+
+Bottom line
+A production‑ready starting point for natural gas price forecasting that balances interpretability (linear/elastic net) with lift (random forests/boosting), evaluated with proper time‑series backtests and grounded in market fundamentals.
+
+
