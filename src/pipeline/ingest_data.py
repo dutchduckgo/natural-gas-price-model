@@ -112,13 +112,26 @@ class DataIngestionPipeline:
                         weather_df = pd.DataFrame({
                             'date': df['date'],
                             'region': df['region'],
-                            'hdd': np.nan,  # Will be calculated
+                            'hdd': np.nan,  # Placeholder columns retained for schema consistency
                             'cdd': np.nan,
                             'hdd_norm_delta': np.nan,
                             'cdd_norm_delta': np.nan,
                             'temperature': df['temperature'],
                             'wind_speed': np.nan
                         })
+                        # Aggregate by date/region to avoid duplicate primary keys
+                        weather_df = (
+                            weather_df
+                            .groupby(['date', 'region'], as_index=False)
+                            .agg({
+                                'hdd': 'first',
+                                'cdd': 'first',
+                                'hdd_norm_delta': 'first',
+                                'cdd_norm_delta': 'first',
+                                'temperature': 'mean',
+                                'wind_speed': 'first'
+                            })
+                        )
                         self.db.insert_weather(weather_df)
             
             logger.info("Weather data ingestion completed successfully")

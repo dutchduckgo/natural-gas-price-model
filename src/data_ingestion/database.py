@@ -160,6 +160,20 @@ class GasModelDatabase:
     
     def insert_weather(self, df: pd.DataFrame):
         """Insert weather data."""
+        if df.empty:
+            logger.warning("No data to insert into weather_daily")
+            return
+        
+        # Remove existing rows with same primary keys to avoid constraint violations
+        if {"date", "region"}.issubset(df.columns):
+            unique_keys = df[["date", "region"]].drop_duplicates()
+            for _, row in unique_keys.iterrows():
+                date_value = pd.to_datetime(row["date"]).strftime("%Y-%m-%d")
+                self.conn.execute(
+                    "DELETE FROM weather_daily WHERE date = ? AND region = ?",
+                    (date_value, row["region"])
+                )
+        
         self._insert_data("weather_daily", df)
     
     def insert_rigs(self, df: pd.DataFrame):

@@ -45,29 +45,47 @@ class EIAClient:
         Returns:
             DataFrame with date and value columns
         """
+        # Use EIA v1 series endpoint for broader compatibility
         params = {
-            "frequency": "daily" if "D" in series_id else "monthly",
-            "data[0]": "value",
-            "sort[0][column]": "period",
-            "sort[0][direction]": "asc"
+            "series_id": series_id,
+            "api_key": self.api_key
         }
         
-        if start_date:
-            params["start"] = start_date
-        if end_date:
-            params["end"] = end_date
-            
-        response = self._make_request(f"natural-gas/pri/fut/{series_id}", params)
+        response = self.session.get("https://api.eia.gov/series/", params=params)
+        try:
+            response.raise_for_status()
+        except requests.exceptions.HTTPError as e:
+            status = e.response.status_code if e.response is not None else None
+            if status == 404:
+                logger.warning(f"EIA series {series_id} not found (404). Skipping.")
+                return pd.DataFrame()
+            logger.error(f"EIA series API request failed: {e}")
+            raise
+        except requests.exceptions.RequestException as e:
+            logger.error(f"EIA series API request failed: {e}")
+            raise
         
-        if "data" not in response:
+        json_data = response.json()
+        if "series" not in json_data or not json_data["series"]:
             logger.warning(f"No data found for series {series_id}")
             return pd.DataFrame()
-            
-        df = pd.DataFrame(response["data"])
-        df["date"] = pd.to_datetime(df["period"])
-        df = df[["date", "value"]].copy()
+        
+        series_data = json_data["series"][0]["data"]
+        df = pd.DataFrame(series_data, columns=["period", "value"])
+        
+        # Convert period strings to datetime (handles daily, weekly, monthly)
+        df["date"] = pd.to_datetime(df["period"], errors="coerce")
+        df = df.dropna(subset=["date"])
         df["value"] = pd.to_numeric(df["value"], errors="coerce")
-        df = df.dropna()
+        df = df.dropna(subset=["value"])
+        
+        # Apply date filters if provided
+        if start_date:
+            df = df[df["date"] >= pd.to_datetime(start_date)]
+        if end_date:
+            df = df[df["date"] <= pd.to_datetime(end_date)]
+        
+        df = df[["date", "value"]].sort_values("date").reset_index(drop=True)
         
         return df
     
