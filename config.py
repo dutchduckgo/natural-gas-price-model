@@ -33,11 +33,12 @@ MODEL_RETRAIN_FREQUENCY = "weekly"
 # Data sources configuration
 EIA_BASE_URL = "https://api.eia.gov/v2"
 EIA_SERIES_IDS = {
-    "henry_hub_spot": "NG.RNGWHHD.D",  # Henry Hub spot price
-    "storage": "NG.NW2_EPG0_SWO_R48_BCF.W",  # Working gas in storage
-    "production": "NG.N9010US2.M",  # Dry natural gas production
-    "consumption": "NG.N3010US2.M",  # Natural gas consumption
-    "lng_exports": "NG.N9130US2.M",  # LNG exports
+    "henry_hub_spot": "NG.RNGWHHD.D",  # Henry Hub spot price (daily)
+    "storage": ["NW2_EPG0_SWO_R31_BCF", "NW2_EPG0_SWO_R32_BCF", "NW2_EPG0_SWO_R33_BCF", 
+                "NW2_EPG0_SWO_R34_BCF", "NW2_EPG0_SWO_R35_BCF", "NW2_EPG0_SWO_R48_BCF"],  # Working gas in storage (weekly) - all regions
+    "production": "N9070US2",  # Dry natural gas production (monthly)
+    "consumption": "NG.N3010US2.M",  # Natural gas consumption (monthly) - TBD
+    "lng_exports": "N9133US2",  # LNG exports (monthly)
 }
 
 # Weather data sources

@@ -145,27 +145,52 @@ class DataIngestionPipeline:
         Ingest power grid data.
         
         Args:
-            start_date: Start date in YYYY-MM-DD format
+            start_date: Start date in YYYY-MM-DD format (defaults to 2019-01-01 for EIA-930)
             end_date: End date in YYYY-MM-DD format
         """
         logger.info("Starting power data ingestion")
         
         try:
-            # Get power data
-            power_data = self.power_client.get_all_power_data(start_date, end_date)
+            # EIA-930 data starts from 2019-01-01, so adjust start_date if needed
+            if start_date and start_date < "2019-01-01":
+                logger.info("EIA-930 data only available from 2019-01-01, adjusting start_date")
+                start_date = "2019-01-01"
+            elif not start_date:
+                start_date = "2019-01-01"
             
-            # Store in database
-            for data_type, df in power_data.items():
-                if not df.empty and "gas_burn" in data_type:
-                    # Transform for power burn table
-                    power_burn_df = pd.DataFrame({
-                        'date': df['date'],
-                        'ba': data_type.replace('_gas_burn', ''),
-                        'gas_mwh': df['gas_burn_mwh'],
-                        'total_load_mwh': np.nan,
-                        'renewables_mwh': np.nan
-                    })
-                    self.db.insert_power_burn(power_burn_df)
+            # Get EIA-930 data from EIA client (more reliable than PowerGridClient)
+            eia_930_df = self.eia_client.get_eia_930_data(start_date, end_date)
+            
+            if not eia_930_df.empty:
+                # Transform for power burn table
+                power_burn_df = pd.DataFrame({
+                    'date': eia_930_df['date'],
+                    'ba': eia_930_df['ba'],
+                    'gas_mwh': eia_930_df['gas_mwh'],
+                    'total_load_mwh': np.nan,  # Not available from EIA-930
+                    'renewables_mwh': np.nan   # Not available from EIA-930
+                })
+                self.db.insert_power_burn(power_burn_df)
+                logger.info(f"Inserted {len(power_burn_df)} EIA-930 records into power_burn table")
+            
+            # Also try other power sources (PJM, ERCOT, ISO-NE) if available
+            try:
+                power_data = self.power_client.get_all_power_data(start_date, end_date)
+                
+                # Store in database
+                for data_type, df in power_data.items():
+                    if not df.empty and "gas_burn" in data_type:
+                        # Transform for power burn table
+                        power_burn_df = pd.DataFrame({
+                            'date': df['date'],
+                            'ba': data_type.replace('_gas_burn', ''),
+                            'gas_mwh': df['gas_burn_mwh'],
+                            'total_load_mwh': np.nan,
+                            'renewables_mwh': np.nan
+                        })
+                        self.db.insert_power_burn(power_burn_df)
+            except Exception as e:
+                logger.warning(f"Could not fetch additional power data sources: {e}")
             
             logger.info("Power data ingestion completed successfully")
             
@@ -178,16 +203,17 @@ class DataIngestionPipeline:
         Ingest all data sources.
         
         Args:
-            start_date: Start date in YYYY-MM-DD format
-            end_date: End date in YYYY-MM-DD format
+            start_date: Start date in YYYY-MM-DD format (defaults to 2010-01-01 to align with storage data)
+            end_date: End date in YYYY-MM-DD format (defaults to today)
         """
         logger.info("Starting complete data ingestion")
         
         # Set default dates if not provided
+        # Default to 2010-01-01 to align with storage data availability
         if not end_date:
             end_date = datetime.now().strftime("%Y-%m-%d")
         if not start_date:
-            start_date = (datetime.now() - timedelta(days=365)).strftime("%Y-%m-%d")
+            start_date = "2010-01-01"  # Align with storage data start date
         
         try:
             # Ingest EIA data

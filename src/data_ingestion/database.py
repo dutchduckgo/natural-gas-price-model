@@ -45,10 +45,10 @@ class GasModelDatabase:
         -- Storage table (weekly grain)
         CREATE TABLE IF NOT EXISTS storage_weekly (
             report_date DATE,
-            working_gas DECIMAL(10,2),
-            five_year_avg DECIMAL(10,2),
-            yoy_deviation DECIMAL(10,2),
-            wow_change DECIMAL(10,2),
+            working_gas DECIMAL(15,2),
+            five_year_avg DECIMAL(15,2),
+            yoy_deviation DECIMAL(15,2),
+            wow_change DECIMAL(15,2),
             PRIMARY KEY (report_date)
         );
         
@@ -193,36 +193,107 @@ class GasModelDatabase:
         self._insert_data("predictions", df)
     
     def _insert_data(self, table_name: str, df: pd.DataFrame):
-        """Insert data into specified table."""
+        """Insert data into specified table using DuckDB native methods."""
         if df.empty:
             logger.warning(f"No data to insert into {table_name}")
             return
             
         try:
-            # Use pandas to_sql with duckdb
-            df.to_sql(table_name, self.conn, if_exists='append', index=False)
+            # Use DuckDB's register and insert methods for better compatibility
+            # Register the DataFrame as a temporary view
+            self.conn.register(f"temp_{table_name}", df)
+            
+            # Get column names
+            columns = ", ".join(df.columns.tolist())
+            
+            # Insert with conflict handling (ON CONFLICT DO NOTHING for primary key violations)
+            # First, try to delete existing records with same primary keys
+            if table_name == "storage_weekly" and "report_date" in df.columns:
+                # Delete existing records for the same dates
+                dates = df["report_date"].unique()
+                for date in dates:
+                    date_str = pd.to_datetime(date).strftime("%Y-%m-%d")
+                    self.conn.execute(
+                        f"DELETE FROM {table_name} WHERE report_date = ?",
+                        [date_str]
+                    )
+            elif table_name == "prices" and "date" in df.columns and "hub" in df.columns:
+                # Delete existing records for the same date/hub combinations
+                for _, row in df.iterrows():
+                    date_str = pd.to_datetime(row["date"]).strftime("%Y-%m-%d")
+                    hub = row["hub"]
+                    self.conn.execute(
+                        f"DELETE FROM {table_name} WHERE date = ? AND hub = ?",
+                        [date_str, hub]
+                    )
+            elif table_name == "production_monthly" and "month" in df.columns:
+                dates = df["month"].unique()
+                for date in dates:
+                    date_str = pd.to_datetime(date).strftime("%Y-%m-%d")
+                    self.conn.execute(
+                        f"DELETE FROM {table_name} WHERE month = ?",
+                        [date_str]
+                    )
+            elif table_name == "lng_monthly" and "month" in df.columns:
+                dates = df["month"].unique()
+                for date in dates:
+                    date_str = pd.to_datetime(date).strftime("%Y-%m-%d")
+                    self.conn.execute(
+                        f"DELETE FROM {table_name} WHERE month = ?",
+                        [date_str]
+                    )
+            
+            # Insert new data
+            self.conn.execute(
+                f"INSERT INTO {table_name} ({columns}) SELECT {columns} FROM temp_{table_name}"
+            )
+            
+            # Unregister temporary view
+            self.conn.unregister(f"temp_{table_name}")
+            
             logger.info(f"Inserted {len(df)} records into {table_name}")
         except Exception as e:
             logger.error(f"Failed to insert data into {table_name}: {e}")
+            # Try to unregister in case of error
+            try:
+                self.conn.unregister(f"temp_{table_name}")
+            except:
+                pass
             raise
     
     def get_data(self, table_name: str, start_date: str = None, end_date: str = None) -> pd.DataFrame:
         """Get data from specified table."""
+        # Map table names to their date column names
+        date_column_map = {
+            "prices": "date",
+            "storage_weekly": "report_date",
+            "production_monthly": "month",
+            "lng_monthly": "month",
+            "weather_daily": "date",
+            "power_burn": "date",
+            "rigs_weekly": "date",
+            "events": "date",
+            "features": "date",
+            "predictions": "date"
+        }
+        
+        date_col = date_column_map.get(table_name, "date")
+        
         query = f"SELECT * FROM {table_name}"
         params = []
         
         if start_date:
-            query += " WHERE date >= ?"
+            query += f" WHERE {date_col} >= ?"
             params.append(start_date)
             
         if end_date:
             if start_date:
-                query += " AND date <= ?"
+                query += f" AND {date_col} <= ?"
             else:
-                query += " WHERE date <= ?"
+                query += f" WHERE {date_col} <= ?"
             params.append(end_date)
-            
-        query += " ORDER BY date"
+        
+        query += f" ORDER BY {date_col}"
         
         try:
             df = pd.read_sql(query, self.conn, params=params)
@@ -233,9 +304,25 @@ class GasModelDatabase:
     
     def get_latest_data(self, table_name: str) -> pd.DataFrame:
         """Get latest data from specified table."""
+        # Map table names to their date column names
+        date_column_map = {
+            "prices": "date",
+            "storage_weekly": "report_date",
+            "production_monthly": "month",
+            "lng_monthly": "month",
+            "weather_daily": "date",
+            "power_burn": "date",
+            "rigs_weekly": "date",
+            "events": "date",
+            "features": "date",
+            "predictions": "date"
+        }
+        
+        date_col = date_column_map.get(table_name, "date")
+        
         query = f"""
         SELECT * FROM {table_name} 
-        WHERE date = (SELECT MAX(date) FROM {table_name})
+        WHERE {date_col} = (SELECT MAX({date_col}) FROM {table_name})
         """
         
         try:

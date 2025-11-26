@@ -13,6 +13,8 @@ from src.models.tree_models import TreeModelPipeline
 from src.models.deep_learning import DeepLearningPipeline
 from src.evaluation.backtesting import Backtester, ModelComparison
 from src.data_ingestion.database import GasModelDatabase
+from src.feature_engineering.weather_features import WeatherFeatureEngineer
+from src.feature_engineering.storage_features import StorageFeatureEngineer
 from config import MODEL_DIR, RESULTS_DIR
 
 logger = logging.getLogger(__name__)
@@ -28,14 +30,14 @@ class ModelTrainingPipeline:
         
     def get_training_data(self, start_date: str = None, end_date: str = None) -> pd.DataFrame:
         """
-        Get training data from database.
+        Get training data from database and apply feature engineering.
         
         Args:
             start_date: Start date in YYYY-MM-DD format
             end_date: End date in YYYY-MM-DD format
             
         Returns:
-            DataFrame with training data
+            DataFrame with training data and engineered features
         """
         # Set default dates if not provided
         if not end_date:
@@ -43,20 +45,57 @@ class ModelTrainingPipeline:
         if not start_date:
             start_date = (datetime.now() - timedelta(days=365*2)).strftime("%Y-%m-%d")
         
-        # Get feature matrix from database
+        # Get raw data from database
+        logger.info(f"Loading data from database: {start_date} to {end_date}")
         df = self.db.get_feature_matrix(start_date, end_date)
         
         if df.empty:
-            logger.warning("No training data found")
+            logger.warning("No training data found in database")
             return pd.DataFrame()
         
-        # Handle missing values
-        df = df.fillna(df.median())
+        logger.info(f"Retrieved {len(df)} raw records from database")
+        
+        # Ensure date column is datetime
+        if 'date' in df.columns:
+            df['date'] = pd.to_datetime(df['date'])
+        
+        # Apply feature engineering
+        logger.info("Applying feature engineering...")
+        
+        # Weather feature engineering (if weather data exists)
+        if 'temperature' in df.columns or 'hdd' in df.columns or 'cdd' in df.columns:
+            weather_engineer = WeatherFeatureEngineer()
+            # Prepare weather data for feature engineering
+            weather_cols = ['date', 'temperature', 'hdd', 'cdd', 'hdd_norm_delta', 'cdd_norm_delta']
+            weather_data = df[['date'] + [col for col in weather_cols if col in df.columns]].copy()
+            if not weather_data.empty:
+                weather_features = weather_engineer.engineer_all_weather_features(weather_data)
+                # Merge weather features back (avoid duplicate date column)
+                weather_features = weather_features.drop(columns=['date'], errors='ignore')
+                df = pd.concat([df, weather_features], axis=1)
+                logger.info(f"Added {len(weather_features.columns)} weather features")
+        
+        # Storage feature engineering (if storage data exists)
+        if 'working_gas' in df.columns:
+            storage_engineer = StorageFeatureEngineer()
+            # Prepare storage data for feature engineering
+            storage_cols = ['date', 'working_gas', 'five_year_avg', 'yoy_deviation', 'wow_change']
+            storage_data = df[['date'] + [col for col in storage_cols if col in df.columns]].copy()
+            if not storage_data.empty:
+                storage_features = storage_engineer.engineer_all_storage_features(storage_data)
+                # Merge storage features back (avoid duplicate date column)
+                storage_features = storage_features.drop(columns=['date'], errors='ignore')
+                df = pd.concat([df, storage_features], axis=1)
+                logger.info(f"Added {len(storage_features.columns)} storage features")
+        
+        # Handle missing values (after feature engineering)
+        numeric_cols = df.select_dtypes(include=[np.number]).columns
+        df[numeric_cols] = df[numeric_cols].fillna(df[numeric_cols].median())
         
         # Remove rows with missing target
         df = df.dropna(subset=['spot_price'])
         
-        logger.info(f"Retrieved {len(df)} training samples")
+        logger.info(f"Final training dataset: {len(df)} samples with {len(df.columns)} features")
         
         return df
     
