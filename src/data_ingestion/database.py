@@ -23,8 +23,18 @@ class GasModelDatabase:
     def _connect(self):
         """Connect to database."""
         try:
-            self.conn = duckdb.connect(self.db_url)
-            logger.info(f"Connected to database: {self.db_url}")
+            # Handle duckdb:// URL scheme - DuckDB expects just a file path
+            if self.db_url.startswith("duckdb:///"):
+                # Remove duckdb:/// prefix and use the path directly
+                db_path = self.db_url.replace("duckdb:///", "")
+            elif self.db_url.startswith("duckdb://"):
+                # Handle duckdb:// format
+                db_path = self.db_url.replace("duckdb://", "")
+            else:
+                db_path = self.db_url
+            
+            self.conn = duckdb.connect(db_path)
+            logger.info(f"Connected to database: {db_path}")
         except Exception as e:
             logger.error(f"Failed to connect to database: {e}")
             raise
@@ -106,13 +116,20 @@ class GasModelDatabase:
         ALTER TABLE weather_daily ADD COLUMN IF NOT EXISTS wind_speed DECIMAL(6,2);
         
         -- Rigs table (weekly grain)
+        -- Create with new schema (date, region as composite primary key)
         CREATE TABLE IF NOT EXISTS rigs_weekly (
             date DATE,
-            total_rigs INTEGER,
-            oil_rigs INTEGER,
+            region TEXT,
             gas_rigs INTEGER,
-            PRIMARY KEY (date)
+            gas_rigs_land INTEGER,
+            gas_rigs_offshore INTEGER,
+            PRIMARY KEY (date, region)
         );
+        
+        -- Add legacy columns if they don't exist (for backward compatibility)
+        -- These may be used by existing queries
+        ALTER TABLE rigs_weekly ADD COLUMN IF NOT EXISTS total_rigs INTEGER;
+        ALTER TABLE rigs_weekly ADD COLUMN IF NOT EXISTS oil_rigs INTEGER;
         
         -- Events table (daily grain)
         CREATE TABLE IF NOT EXISTS events (
@@ -282,9 +299,56 @@ class GasModelDatabase:
         
         logger.info(f"Inserted/updated {len(df)} historical weather records")
     
-    def insert_rigs(self, df: pd.DataFrame):
-        """Insert rigs data."""
+    def insert_rig_counts(self, df: pd.DataFrame):
+        """
+        Insert or upsert weekly gas rig counts into rigs_weekly.
+        
+        Uses MERGE/upsert strategy keyed on (date, region).
+        If a row exists for that date+region, updates gas_rigs/gas_rigs_land/gas_rigs_offshore.
+        If not, inserts a new row.
+        
+        Args:
+            df: DataFrame with columns: date, region, gas_rigs, gas_rigs_land, gas_rigs_offshore
+        """
+        if df.empty:
+            logger.warning("No rig count data to insert")
+            return
+        
+        # Ensure required columns exist
+        required_cols = ['date', 'region', 'gas_rigs', 'gas_rigs_land', 'gas_rigs_offshore']
+        if not all(col in df.columns for col in required_cols):
+            missing = [col for col in required_cols if col not in df.columns]
+            logger.error(f"Missing required columns: {missing}")
+            raise ValueError(f"DataFrame must contain columns: {required_cols}")
+        
+        # Ensure date is datetime and region is string
+        df = df.copy()
+        df['date'] = pd.to_datetime(df['date'])
+        df['region'] = df['region'].astype(str)
+        
+        # Ensure integer types for rig counts
+        df['gas_rigs'] = df['gas_rigs'].fillna(0).astype(int)
+        df['gas_rigs_land'] = df['gas_rigs_land'].fillna(0).astype(int)
+        df['gas_rigs_offshore'] = df['gas_rigs_offshore'].fillna(0).astype(int)
+        
+        # Remove existing rows with same primary keys (date, region) to avoid constraint violations
+        if {"date", "region"}.issubset(df.columns):
+            unique_keys = df[["date", "region"]].drop_duplicates()
+            for _, row in unique_keys.iterrows():
+                date_value = pd.to_datetime(row["date"]).strftime("%Y-%m-%d")
+                region_value = str(row["region"])
+                self.conn.execute(
+                    "DELETE FROM rigs_weekly WHERE date = ? AND region = ?",
+                    (date_value, region_value)
+                )
+        
+        # Insert new data
         self._insert_data("rigs_weekly", df)
+        logger.info(f"Inserted/updated {len(df)} rig count records")
+    
+    def insert_rigs(self, df: pd.DataFrame):
+        """Insert rigs data (alias for backward compatibility)."""
+        self.insert_rig_counts(df)
     
     def insert_events(self, df: pd.DataFrame):
         """Insert events data."""
@@ -347,6 +411,16 @@ class GasModelDatabase:
                     self.conn.execute(
                         f"DELETE FROM {table_name} WHERE month = ?",
                         [date_str]
+                    )
+            elif table_name == "rigs_weekly" and "date" in df.columns and "region" in df.columns:
+                # Delete existing records for the same date/region combinations
+                unique_keys = df[["date", "region"]].drop_duplicates()
+                for _, row in unique_keys.iterrows():
+                    date_str = pd.to_datetime(row["date"]).strftime("%Y-%m-%d")
+                    region = str(row["region"])
+                    self.conn.execute(
+                        f"DELETE FROM {table_name} WHERE date = ? AND region = ?",
+                        [date_str, region]
                     )
             
             # Insert new data
@@ -458,16 +532,29 @@ class GasModelDatabase:
             pb.renewables_mwh,
             w.hdd,
             w.cdd,
+            w.hdd_norm,
+            w.cdd_norm,
+            w.hdd_anom,
+            w.cdd_anom,
             w.temperature,
-            r.total_rigs,
-            r.gas_rigs
+            w.wind_speed,
+            r.gas_rigs,
+            r.gas_rigs_land,
+            r.gas_rigs_offshore
         FROM prices p
         LEFT JOIN storage_weekly s ON p.date = s.report_date
         LEFT JOIN production_monthly pr ON p.date = pr.month
         LEFT JOIN lng_monthly l ON p.date = l.month
-        LEFT JOIN power_burn pb ON p.date = pb.date
-        LEFT JOIN weather_daily w ON p.date = w.date
-        LEFT JOIN rigs_weekly r ON p.date = r.date
+        LEFT JOIN (
+            SELECT date, 
+                   SUM(gas_mwh) as gas_mwh,
+                   SUM(total_load_mwh) as total_load_mwh,
+                   SUM(renewables_mwh) as renewables_mwh
+            FROM power_burn
+            GROUP BY date
+        ) pb ON p.date = pb.date
+        LEFT JOIN weather_daily w ON p.date = w.date AND w.region = 'CONUS'
+        LEFT JOIN rigs_weekly r ON p.date = r.date AND r.region = 'US'
         WHERE p.date BETWEEN ? AND ?
         ORDER BY p.date
         """

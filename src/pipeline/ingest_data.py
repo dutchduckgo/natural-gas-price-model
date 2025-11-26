@@ -13,6 +13,7 @@ from src.data_ingestion.weather_client import WeatherClient
 from src.data_ingestion.power_client import PowerGridClient
 from src.data_ingestion.cpc_client import CPCDegreeDayClient
 from src.data_ingestion.noaa_client import NOAAWeatherClient
+from src.data_ingestion.rigs_client import RigCountClient
 from src.data_ingestion.database import GasModelDatabase
 from config import RAW_DATA_DIR, PROCESSED_DATA_DIR
 
@@ -28,6 +29,7 @@ class DataIngestionPipeline:
         self.power_client = PowerGridClient()
         self.cpc_client = CPCDegreeDayClient()
         self.noaa_client = NOAAWeatherClient()
+        self.rigs_client = RigCountClient()
         self.db = GasModelDatabase()
         
     def ingest_eia_data(self, start_date: str = None, end_date: str = None):
@@ -248,6 +250,9 @@ class DataIngestionPipeline:
             
             # Ingest power data
             self.ingest_power_data(start_date, end_date)
+            
+            # Ingest rig counts (from Excel file, no date range needed)
+            self.ingest_rig_counts()
             
             logger.info("Complete data ingestion finished successfully")
             

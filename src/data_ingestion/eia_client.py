@@ -413,7 +413,7 @@ class EIAClient:
     def get_consumption_data(self, start_date: str = None, end_date: str = None) -> pd.DataFrame:
         """
         Get monthly consumption data from Excel file.
-        Reads from NG_CONS_SUM_A_EPG0_VC0_MMCF_M.xls in the data directory.
+        Reads from consumption_data.xls in the data directory.
         File structure: Sheet "Data 1", dates in column 0 starting row 2, values in column 1.
         Default start date is 2010-01-01 to align with storage data availability.
         """
@@ -421,7 +421,7 @@ class EIAClient:
         if start_date is None:
             start_date = "2010-01-01"
         
-        consumption_file = DATA_DIR / "NG_CONS_SUM_A_EPG0_VC0_MMCF_M.xls"
+        consumption_file = DATA_DIR / "consumption_data.xls"
         
         if not consumption_file.exists():
             logger.warning(f"Consumption file not found: {consumption_file}")

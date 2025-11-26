@@ -11,7 +11,7 @@ Based on the database schema and codebase analysis, here are the data sources th
    - ✅ Storage Data (weekly) - 829 records (2010-2025)
    - ✅ Production Data (monthly) - 188 records (2010-2025)
    - ✅ Consumption Data (monthly) - 188 records (2010-2025)
-   - ✅ LNG Exports (monthly) - 188 records (2010-2025)
+   - ✅ LNG Exports (monthly) - 188 records (2010-s2025)
 
 2. **EIA-930 Power Grid Data** (Working with 2019-2025 data):
    - ✅ EIA-930 Grid Monitor (daily, aggregated from hourly)
@@ -45,6 +45,17 @@ Based on the database schema and codebase analysis, here are the data sources th
   - Units: Temperature in °F, Wind speed in mph
   - Integration: Stored in `weather_daily` table with columns: `temperature`, `wind_speed`
   - Impact: High (historical temperature and wind data for feature engineering)
+
+3. **Rig Count Data** (Fully implemented):
+   - ✅ **Baker Hughes Weekly Rig Count** - U.S. gas rig counts (fully implemented)
+   - Source: Baker Hughes North America Weekly Rig Count Report (Excel file)
+   - Data: Weekly U.S. gas rig counts (2013-2025)
+   - Filters: Country="UNITED STATES", DrillFor="Gas" (enforced in code, not Excel slicers)
+   - Aggregation: Weekly by US_PublishDate
+   - Columns: `date`, `region`, `gas_rigs`, `gas_rigs_land`, `gas_rigs_offshore`
+   - Records: 661 weekly records (2013-01-04 to 2025-08-29)
+   - Integration: Stored in `rigs_weekly` table
+   - Impact: Medium-High (supply-side indicator for drilling activity)
 
 ### Key Differences Between Weather Data Sources:
 
@@ -89,12 +100,6 @@ Additional regional power data sources (EIA-930 covers all major BAs):
    - Source: ISO-NE Web Services
    - Impact: Medium (regional power data)
 
-### Rig Count Data
-- **Status**: Database table exists but no ingestion method
-- **Table**: `rigs_weekly`
-- **Needed for**: Supply-side indicators (drilling activity)
-- **Source**: Baker Hughes Rig Count API
-- **Impact**: Medium (supply indicator, but production data may be sufficient)
 
 ### Events Data
 - **Status**: Database table exists but no ingestion method
@@ -111,19 +116,20 @@ Additional regional power data sources (EIA-930 covers all major BAs):
    - ✅ NOAA Historical Weather (temperature and wind speed)
    - ✅ EIA-930 Power Grid Data (covers all major BAs from 2019-2025)
 
-### Medium Priority (nice to have)
-2. **Rig Count Data** - Supply-side indicator
-   - Status: Database table exists but no ingestion method
-   - Source: Baker Hughes Rig Count API
-   - Impact: Medium (supply indicator, but production data may be sufficient)
+2. ✅ **Rig Count Data** - **NOW IMPLEMENTED**
+   - ✅ Baker Hughes Weekly Rig Count (U.S. gas rigs, 2013-2025)
+   - ✅ Weekly aggregation with land/offshore breakdown
+   - ✅ Integrated into `rigs_weekly` table
+   - Impact: Medium-High (supply-side indicator for drilling activity)
 
-3. **Regional Power Data** (PJM, ERCOT, ISO-NE) - Regional demand patterns
+### Medium Priority (nice to have)
+1. **Regional Power Data** (PJM, ERCOT, ISO-NE) - Regional demand patterns
    - Status: Placeholder implementations
    - Note: EIA-930 already covers these BAs, so this is lower priority
    - Impact: Low-Medium (EIA-930 provides sufficient coverage)
 
 ### Low Priority (can add later)
-5. **Events Data** - Important for specific events but may be sparse
+3. **Events Data** - Important for specific events but may be sparse
 
 ## Current Model Training Status
 
@@ -137,9 +143,10 @@ Additional regional power data sources (EIA-930 covers all major BAs):
 - ✅ Weather Forecast (NWS, forecast data for next 14 days - forward-looking only)
 - ✅ **CPC Degree Days** (daily HDD/CDD with normals and anomalies, 2010-present - historical)
 - ✅ **NOAA Historical Weather** (daily temperature and wind speed, aggregated CONUS, 2010-present - historical)
+- ✅ **Rig Count Data** (weekly U.S. gas rigs, 2013-2025, with land/offshore breakdown)
 
 **Missing for optimal performance:**
-- ⚠️ Rig count data (supply indicator) - Optional, production data may be sufficient
+- None - all core data sources are now implemented
 
 ## Next Steps
 
@@ -148,20 +155,24 @@ Additional regional power data sources (EIA-930 covers all major BAs):
    - CPC Degree Days (HDD/CDD with normals and anomalies)
    - NOAA Historical Weather (temperature and wind speed)
 2. ✅ **CPC Degree Days** - Fully implemented
+3. ✅ **Rig Count Data** - Fully implemented
+   - Baker Hughes Weekly Rig Count (U.S. gas rigs, 2013-2025)
+   - Weekly aggregation with land/offshore breakdown
+   - Integrated into `rigs_weekly` table
 
 **Optional improvements:**
-1. **Rig Count Data** - Supply indicator (optional, production data may be sufficient)
-2. **Regional Power Data** (PJM, ERCOT, ISO-NE) - Lower priority since EIA-930 covers these BAs
-3. **Events Data** - LNG terminal outages, pipeline disruptions (manual tracking or FERC/DOE sources)
+1. **Regional Power Data** (PJM, ERCOT, ISO-NE) - Lower priority since EIA-930 covers these BAs
+2. **Events Data** - LNG terminal outages, pipeline disruptions (manual tracking or FERC/DOE sources)
 
 **Current Status:**
 - ✅ Core EIA data: 2010-2025 (15+ years)
 - ✅ Power burn data: 2019-2025 (6+ years, all major BAs)
-- ✅ **Weather data: 2010-present (15+ years)**
+- ✅ Weather data: 2010-present (15+ years)
   - CPC Degree Days (HDD/CDD with normals and anomalies)
   - NOAA Historical Weather (temperature and wind speed)
+- ✅ Rig count data: 2013-2025 (12+ years, weekly U.S. gas rigs with land/offshore breakdown)
 - ✅ **The dataset is now comprehensive and sufficient to train high-accuracy models with full feature engineering**
   - All core fundamentals covered (prices, storage, production, consumption, LNG exports)
   - Power burn data from all major balancing authorities
   - Complete historical weather data for HDD/CDD and temperature-based features
-
+  - Supply-side indicators (rig counts) for drilling activity analysis

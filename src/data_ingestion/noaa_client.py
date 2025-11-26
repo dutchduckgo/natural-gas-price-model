@@ -149,6 +149,9 @@ class NOAAWeatherClient:
         """
         Get daily weather data for a specific station.
         
+        Note: NOAA API requires date ranges to be less than 1 year.
+        This method automatically splits larger ranges into 1-year chunks.
+        
         Args:
             station_id: Station ID (e.g., "USW00012960")
             start_date: Start date in YYYY-MM-DD format
@@ -157,28 +160,55 @@ class NOAAWeatherClient:
         Returns:
             DataFrame with columns: date, station_id, tmax, tmin, tavg, awnd
         """
+        logger.info(f"Fetching weather data for station {station_id} from {start_date} to {end_date}")
+        
+        # Parse dates
+        start = pd.to_datetime(start_date)
+        end = pd.to_datetime(end_date)
+        
+        # Check if date range is valid
+        if start > end:
+            logger.error(f"Invalid date range: {start_date} to {end_date}")
+            return pd.DataFrame()
+        
+        # NOAA API requires date ranges to be less than 1 year
+        # Split into 1-year chunks if needed
+        date_chunks = []
+        current_start = start
+        while current_start <= end:
+            # Calculate end of current chunk (1 year from start, or end date, whichever is earlier)
+            chunk_end = min(current_start + pd.Timedelta(days=365), end)
+            date_chunks.append((current_start, chunk_end))
+            current_start = chunk_end + pd.Timedelta(days=1)
+        
+        if len(date_chunks) > 1:
+            logger.info(f"Splitting date range into {len(date_chunks)} chunks (NOAA API limit: 1 year per request)")
+        
         # Fetch each datatype separately (NOAA API doesn't handle multiple datatypes well in one call)
         all_results = []
         
-        for datatype in ["TMAX", "TMIN", "AWND"]:
-            params = {
-                "datasetid": "GHCND",
-                "stationid": f"GHCND:{station_id}",
-                "startdate": start_date,
-                "enddate": end_date,
-                "datatypeid": datatype,
-                "units": "standard",
-            }
+        # Fetch data for each date chunk
+        for chunk_start, chunk_end in date_chunks:
+            chunk_start_str = chunk_start.strftime("%Y-%m-%d")
+            chunk_end_str = chunk_end.strftime("%Y-%m-%d")
             
-            try:
-                data = self._request("data", params)
-                results = data.get("results", [])
-                all_results.extend(results)
-            except Exception as e:
-                logger.warning(f"Failed to fetch {datatype} for station {station_id}: {e}")
-                continue
-        
-        logger.info(f"Fetching weather data for station {station_id} from {start_date} to {end_date}")
+            for datatype in ["TMAX", "TMIN", "AWND"]:
+                params = {
+                    "datasetid": "GHCND",
+                    "stationid": f"GHCND:{station_id}",
+                    "startdate": chunk_start_str,
+                    "enddate": chunk_end_str,
+                    "datatypeid": datatype,
+                    "units": "standard",
+                }
+                
+                try:
+                    data = self._request("data", params)
+                    results = data.get("results", [])
+                    all_results.extend(results)
+                except Exception as e:
+                    logger.warning(f"Failed to fetch {datatype} for station {station_id} ({chunk_start_str} to {chunk_end_str}): {e}")
+                    continue
         
         try:
             if not all_results:
@@ -353,7 +383,7 @@ def main():
     
     if not client.token:
         print("ERROR: NOAA_CDO_TOKEN not set in environment")
-        print("Please set it with: export NOAA_CDO_TOKEN='WmnnsvLsydLYxTVhCqgOFKBNYKJDVQnO'")
+        print("Please set it with: export NOAA_CDO_TOKEN='XXX'")
         return
     
     print("Testing NOAA Weather Client...")
