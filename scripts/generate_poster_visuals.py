@@ -19,13 +19,18 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import Dict
 
 # Add src to path
 sys.path.append(str(Path(__file__).parent.parent))
 
 from src.models.baseline import BaselinePipeline
-from src.feature_engineering.weather_features import WeatherFeatureEngineer
-from src.feature_engineering.storage_features import StorageFeatureEngineer
+from src.models.tree_models import TreeModelPipeline
+from src.data_ingestion.database import GasModelDatabase
+from src.pipeline.train_baseline import ModelTrainingPipeline
+from src.feature_engineering.price_features import PriceFeatureEngineer
+from config import TARGET_HORIZON_DAYS
+from src.feature_engineering.price_features import PriceFeatureEngineer
 
 # Set style for publication-quality figures
 plt.style.use('seaborn-v0_8-whitegrid')
@@ -40,47 +45,366 @@ plt.rcParams['ytick.labelsize'] = 9
 plt.rcParams['legend.fontsize'] = 9
 plt.rcParams['figure.titlesize'] = 14
 
+# Model configuration
+MODEL_LIST = ['elastic_net', 'linear', 'random_forest', 'xgboost', 'lightgbm']
+MODEL_DISPLAY_NAMES = {
+    'elastic_net': 'Elastic Net',
+    'linear': 'Linear Regression',
+    'random_forest': 'Random Forest',
+    'xgboost': 'XGBoost',
+    'lightgbm': 'LightGBM'
+}
+TARGET_COL = 'spot_price_target'
+PRICE_ENGINEER = PriceFeatureEngineer()
+POSTER_TEST_WINDOW = 252  # ~1 trading year
+POSTER_MAX_TRAIN_WINDOW = 1500  # cap to maintain regime relevance
+
 # Create output directory
 OUTPUT_DIR = Path(__file__).parent.parent / "poster_figures"
 OUTPUT_DIR.mkdir(exist_ok=True)
 
 
-def create_sample_data():
-    """Create realistic sample data for visualization."""
-    np.random.seed(42)
-    n_samples = 1000
+def load_real_data(start_date: str = "2015-01-01", end_date: str = "2024-12-31") -> pd.DataFrame:
+    """
+    Load real data from DuckDB feature matrix for visualization/modeling.
+    """
+    db = GasModelDatabase()
+    try:
+        df = db.get_feature_matrix(start_date, end_date)
+    finally:
+        db.close()
     
-    dates = pd.date_range('2020-01-01', periods=n_samples)
+    if df.empty:
+        raise RuntimeError("Feature matrix is empty. Please run the ingestion pipeline first.")
     
-    # Create synthetic features with realistic patterns
-    hdd = 20 + 30 * np.sin(2 * np.pi * np.arange(n_samples) / 365) + np.random.normal(0, 5, n_samples)
-    hdd = np.maximum(hdd, 0)
+    df['date'] = pd.to_datetime(df['date'])
     
-    cdd = 10 + 20 * np.sin(2 * np.pi * np.arange(n_samples) / 365) + np.random.normal(0, 3, n_samples)
-    cdd = np.maximum(cdd, 0)
+    # Preserve working_gas but create storage alias for plotting
+    if 'working_gas' in df.columns:
+        df['storage'] = df['working_gas']
+    if 'dry_gas_bcfpd' in df.columns:
+        df = df.rename(columns={'dry_gas_bcfpd': 'production'})
     
-    storage = 3000 + 500 * np.sin(2 * np.pi * np.arange(n_samples) / 365) + np.random.normal(0, 100, n_samples)
-    temperature = 50 + 30 * np.sin(2 * np.pi * np.arange(n_samples) / 365) + np.random.normal(0, 5, n_samples)
-    production = 100 + 0.1 * np.arange(n_samples) + np.random.normal(0, 5, n_samples)
+    # Keep only needed columns + engineered features source columns
+    keep_cols = [
+        'date', 'spot_price', 'hdd', 'cdd', 'hdd_norm', 'cdd_norm',
+        'hdd_anom', 'cdd_anom', 'storage', 'working_gas',
+        'five_year_avg', 'yoy_deviation', 'wow_change',
+        'temperature', 'wind_speed', 'production', 'gas_rigs', 'gas_mwh',
+        'front_month'
+    ]
+    available_cols = [col for col in keep_cols if col in df.columns]
+    df = df[available_cols].sort_values('date').reset_index(drop=True)
     
-    # Create target with realistic relationships
-    spot_price = (
-        3.0 + 0.01 * hdd + 0.005 * cdd - 0.0001 * storage + 
-        0.001 * production + np.random.normal(0, 0.1, n_samples)
-    )
-    spot_price = np.maximum(spot_price, 0.5)
+    # Limit rows to most recent 2000 observations for faster plotting
+    if len(df) > 2000:
+        df = df.iloc[-2000:].reset_index(drop=True)
     
-    df = pd.DataFrame({
-        'date': dates,
-        'spot_price': spot_price,
-        'hdd': hdd,
-        'cdd': cdd,
-        'storage': storage,
-        'temperature': temperature,
-        'production': production
-    })
+    df = df.ffill().bfill()
+    
+    # Reconstruct storage reference series if missing/NaN
+    if 'working_gas' in df.columns:
+        wg = df['working_gas'].ffill()
+        # 5-year rolling average (approx 260 trading days/weeks)
+        if 'five_year_avg' not in df.columns or df['five_year_avg'].notna().sum() == 0:
+            df['five_year_avg'] = wg.rolling(window=260, min_periods=26).mean()
+        else:
+            df['five_year_avg'] = df['five_year_avg'].fillna(
+                wg.rolling(window=260, min_periods=26).mean()
+            )
+        if 'yoy_deviation' not in df.columns or df['yoy_deviation'].notna().sum() == 0:
+            df['yoy_deviation'] = wg - wg.shift(52)
+        else:
+            df['yoy_deviation'] = df['yoy_deviation'].fillna(wg - wg.shift(52))
+        if 'wow_change' not in df.columns or df['wow_change'].notna().sum() == 0:
+            df['wow_change'] = wg - wg.shift(7)
+        else:
+            df['wow_change'] = df['wow_change'].fillna(wg - wg.shift(7))
+    
+    # Drop columns that remain entirely NaN
+    df = df.dropna(axis=1, how='all')
     
     return df
+
+
+def load_training_dataset(start_date: str = "2015-01-01", end_date: str = "2024-12-31") -> pd.DataFrame:
+    """Use existing training pipeline to get model-ready features."""
+    pipeline = ModelTrainingPipeline()
+    try:
+        df = pipeline.get_training_data(start_date, end_date)
+    finally:
+        pipeline.db.close()
+    
+    df = df.sort_values('date').reset_index(drop=True)
+    if len(df) > 2000:
+        df = df.iloc[-2000:].reset_index(drop=True)
+    return df
+
+
+def ensure_target_column(df: pd.DataFrame, horizon: int = TARGET_HORIZON_DAYS) -> pd.DataFrame:
+    """Guarantee the future target column exists."""
+    if TARGET_COL not in df.columns:
+        df[TARGET_COL] = df['spot_price'].shift(-horizon)
+        df['target_date'] = df['date'] + pd.to_timedelta(horizon, unit='D')
+    return df
+
+
+def prepare_model_features(df: pd.DataFrame) -> pd.DataFrame:
+    features = df.copy()
+    features = features.loc[:, ~features.columns.duplicated()]
+    features = ensure_target_column(features)
+    features = PRICE_ENGINEER.transform(features)
+    features = features.sort_values('date').reset_index(drop=True)
+    
+    if 'date' not in features.columns:
+        features['date'] = pd.date_range(start=0, periods=len(features))
+    
+    numeric_cols = features.select_dtypes(include=[np.number]).columns.tolist()
+    keep_cols = ['date'] + [col for col in numeric_cols if col != 'date']
+    features = features[keep_cols]
+    
+    num_only = features.select_dtypes(include=[np.number]).columns
+    features[num_only] = features[num_only].fillna(features[num_only].median())
+    features[num_only] = features[num_only].fillna(0)
+    features[num_only] = features[num_only].replace([np.inf, -np.inf], 0)
+    
+    features = features.dropna(subset=['spot_price', TARGET_COL])
+    return features.reset_index(drop=True)
+
+
+def split_poster_train_test(features: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Chronological split that mimics walk-forward evaluation."""
+    if len(features) <= POSTER_TEST_WINDOW:
+        raise ValueError("Not enough rows for poster train/test split.")
+    
+    if len(features) > POSTER_MAX_TRAIN_WINDOW + POSTER_TEST_WINDOW:
+        train_df = features.iloc[-(POSTER_MAX_TRAIN_WINDOW + POSTER_TEST_WINDOW):-POSTER_TEST_WINDOW]
+    else:
+        train_df = features.iloc[:-POSTER_TEST_WINDOW]
+    
+    test_df = features.iloc[-POSTER_TEST_WINDOW:]
+    return train_df.reset_index(drop=True), test_df.reset_index(drop=True)
+
+
+def log_target_alignment_samples(df: pd.DataFrame, rows: int = 5):
+    print(f"\nTarget alignment check (first {rows} rows):")
+    sample = df[['date', 'spot_price', TARGET_COL]].head(rows).copy()
+    sample['target_date'] = sample['date'] + pd.to_timedelta(TARGET_HORIZON_DAYS, unit='D')
+    print(sample.to_string(index=False))
+
+
+def log_price_feature_samples(df: pd.DataFrame, rows: int = 5):
+    cols = ['spot_price', 'spot_price_lag_1', 'spot_price_lag_7',
+            'spot_price_ma_5', 'spot_price_return_5']
+    available = [c for c in cols if c in df.columns]
+    if not available:
+        print("Price feature sample skipped (columns missing).")
+        return
+    print(f"\nPrice feature alignment (first {rows} rows):")
+    print(df[['date'] + available].head(rows).to_string(index=False))
+
+
+def compute_naive_baseline(test_df: pd.DataFrame) -> Dict[str, float]:
+    """Simple naive forecast using current spot to predict future target."""
+    y_true = test_df[TARGET_COL].values
+    y_pred = test_df['spot_price'].values
+    errors = y_pred - y_true
+    return {
+        "mae": float(np.mean(np.abs(errors))),
+        "rmse": float(np.sqrt(np.mean(errors ** 2))),
+        "mean_error": float(np.mean(errors))
+    }
+
+
+def get_pipeline_for_model(model_name: str):
+    """Return the appropriate pipeline instance for a given model."""
+    if model_name in {'elastic_net', 'linear', 'random_forest'}:
+        return BaselinePipeline(model_name, target_col=TARGET_COL)
+    elif model_name in {'xgboost', 'lightgbm'}:
+        return TreeModelPipeline(model_name, target_col=TARGET_COL)
+    raise ValueError(f"Unsupported model: {model_name}")
+
+
+def compute_regression_metrics(actual: np.ndarray, predictions: np.ndarray) -> Dict[str, float]:
+    """Compute common regression metrics."""
+    epsilon = 1e-6
+    errors = predictions - actual
+    mae = np.mean(np.abs(errors))
+    rmse = np.sqrt(np.mean(errors ** 2))
+    mape = np.mean(np.abs(errors / np.maximum(np.abs(actual), epsilon))) * 100
+    ss_res = np.sum(errors ** 2)
+    ss_tot = np.sum((actual - np.mean(actual)) ** 2) or epsilon
+    r2 = 1 - ss_res / ss_tot
+    mean_error = np.mean(errors)
+    return {"mae": mae, "rmse": rmse, "mape": mape, "r2": r2, "mean_error": mean_error}
+
+
+def print_bias_diagnostics(model_name: str, dates: np.ndarray,
+                           actual: np.ndarray, predictions: np.ndarray):
+    """Log summary statistics to make bias issues visible."""
+    errors = predictions - actual
+    mae = np.mean(np.abs(errors))
+    print(
+        f"    [{model_name}] test_mean={actual.mean():.2f} | "
+        f"pred_mean={predictions.mean():.2f} | mean_error={errors.mean():.2f} | MAE={mae:.2f}"
+    )
+    sample_len = min(5, len(actual))
+    if sample_len:
+        sample = pd.DataFrame({
+            'date': pd.to_datetime(dates[:sample_len]),
+            'actual': actual[:sample_len],
+            'prediction': predictions[:sample_len],
+            'error': errors[:sample_len]
+        })
+        print(sample.to_string(index=False))
+
+
+def train_and_predict_model(model_name: str, train_df: pd.DataFrame, test_df: pd.DataFrame) -> Dict:
+    """Train model on train_df and generate predictions for test_df."""
+    pipeline = get_pipeline_for_model(model_name)
+    pipeline.train_final_model(train_df)
+    
+    X_test, y_test = pipeline.model.prepare_features(test_df, target_col=TARGET_COL)
+    predictions = pipeline.model.predict(X_test)
+    
+    importance_df = None
+    try:
+        if hasattr(pipeline, "get_feature_importance"):
+            importance_df = pipeline.get_feature_importance()
+        elif hasattr(pipeline.model, "get_feature_importance"):
+            importance_df = pipeline.model.get_feature_importance()
+    except Exception:
+        importance_df = None
+    
+    return {
+        "pipeline": pipeline,
+        "actual": y_test.values,
+        "predictions": predictions,
+        "importance": importance_df
+    }
+
+
+def plot_model_prediction_vs_actual(model_name: str, display_name: str,
+                                    actual: np.ndarray, predictions: np.ndarray,
+                                    metrics: Dict[str, float]):
+    fig, ax = plt.subplots(figsize=(8, 8))
+    ax.scatter(actual, predictions, alpha=0.6, s=30, color='#2E86AB', edgecolors='black', linewidth=0.5)
+    
+    min_val = min(actual.min(), predictions.min())
+    max_val = max(actual.max(), predictions.max())
+    ax.plot([min_val, max_val], [min_val, max_val], 'r--', linewidth=2, label='Perfect Prediction')
+    
+    ax.set_xlabel('Actual Price ($/MMBtu)', fontweight='bold')
+    ax.set_ylabel('Predicted Price ($/MMBtu)', fontweight='bold')
+    ax.set_title(f'{display_name}: Prediction vs Actual (R² = {metrics["r2"]:.3f})', fontweight='bold', fontsize=12)
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    plt.savefig(OUTPUT_DIR / f'{model_name}_prediction_vs_actual.png', bbox_inches='tight', facecolor='white')
+    plt.close()
+    print(f"Saved: {OUTPUT_DIR / f'{model_name}_prediction_vs_actual.png'}")
+
+
+def plot_model_time_series(model_name: str, display_name: str,
+                           dates: np.ndarray, actual: np.ndarray, predictions: np.ndarray,
+                           metrics: Dict[str, float]):
+    fig, ax = plt.subplots(figsize=(14, 6))
+    
+    ax.plot(dates, actual, label='Actual', color='#2E86AB', linewidth=2, alpha=0.8)
+    ax.plot(dates, predictions, label='Predicted', color='#A23B72', linewidth=2, alpha=0.8, linestyle='--')
+    
+    ax.set_xlabel('Date', fontweight='bold')
+    ax.set_ylabel('Price ($/MMBtu)', fontweight='bold')
+    ax.set_title(f'{display_name}: Actual vs Predicted (MAE={metrics["mae"]:.2f}, RMSE={metrics["rmse"]:.2f})',
+                 fontweight='bold', fontsize=12)
+    ax.legend(loc='best')
+    ax.grid(True, alpha=0.3)
+    
+    plt.xticks(rotation=45)
+    plt.tight_layout()
+    plt.savefig(OUTPUT_DIR / f'{model_name}_time_series.png', bbox_inches='tight', facecolor='white')
+    plt.close()
+    print(f"Saved: {OUTPUT_DIR / f'{model_name}_time_series.png'}")
+
+
+def plot_model_error_distribution(model_name: str, display_name: str, errors: np.ndarray):
+    fig, ax = plt.subplots(figsize=(10, 6))
+    ax.hist(errors, bins=30, color='#2E86AB', alpha=0.7, edgecolor='black', linewidth=0.5)
+    ax.axvline(x=0, color='red', linestyle='--', linewidth=2, label='Zero Error')
+    ax.axvline(x=np.mean(errors), color='green', linestyle='--', linewidth=2,
+               label=f'Mean: {np.mean(errors):.4f}')
+    
+    ax.set_xlabel('Prediction Error ($/MMBtu)', fontweight='bold')
+    ax.set_ylabel('Frequency', fontweight='bold')
+    ax.set_title(f'{display_name}: Error Distribution', fontweight='bold', fontsize=12)
+    ax.legend()
+    ax.grid(True, alpha=0.3, axis='y')
+    
+    plt.tight_layout()
+    plt.savefig(OUTPUT_DIR / f"{model_name}_error_distribution.png", bbox_inches='tight', facecolor='white')
+    plt.close()
+    print(f"Saved: {OUTPUT_DIR / f'{model_name}_error_distribution.png'}")
+
+
+def plot_model_feature_importance(model_name: str, display_name: str, importance_df: pd.DataFrame):
+    if importance_df is None or importance_df.empty:
+        print(f"Skipping feature importance poster for {display_name}: no data available.")
+        return
+    
+    top_n = min(15, len(importance_df))
+    top_features = importance_df.sort_values('importance', ascending=False).head(top_n)
+    
+    fig, ax = plt.subplots(figsize=(10, 8))
+    y_pos = np.arange(len(top_features))
+    ax.barh(y_pos, top_features['importance'], color='#2E86AB', alpha=0.8)
+    
+    ax.set_yticks(y_pos)
+    ax.set_yticklabels(top_features['feature'], fontsize=9)
+    ax.set_xlabel('Importance', fontweight='bold')
+    ax.set_title(f'{display_name}: Top {len(top_features)} Features', fontweight='bold', fontsize=12)
+    ax.grid(True, alpha=0.3, axis='x')
+    
+    plt.tight_layout()
+    plt.savefig(OUTPUT_DIR / f"{model_name}_feature_importance.png", bbox_inches='tight', facecolor='white')
+    plt.close()
+    print(f"Saved: {OUTPUT_DIR / f'{model_name}_feature_importance.png'}")
+
+
+def generate_model_specific_posters(df: pd.DataFrame):
+    """Generate per-model posters for all configured models."""
+    print("\nGenerating model-specific posters...")
+    features = prepare_model_features(df)
+    train_df, test_df = split_poster_train_test(features)
+    test_dates = pd.to_datetime(test_df['date'].values)
+    
+    log_target_alignment_samples(test_df)
+    log_price_feature_samples(test_df)
+    naive_metrics = compute_naive_baseline(test_df)
+    print(f"\nNaive baseline (predict spot_t for spot_t+{TARGET_HORIZON_DAYS}): "
+          f"MAE={naive_metrics['mae']:.3f}, "
+          f"RMSE={naive_metrics['rmse']:.3f}, "
+          f"Mean Error={naive_metrics['mean_error']:.3f}")
+    
+    for model_name in MODEL_LIST:
+        display_name = MODEL_DISPLAY_NAMES.get(model_name, model_name.title())
+        print(f"\n[{display_name}] Training and plotting...")
+        result = train_and_predict_model(model_name, train_df, test_df)
+        
+        actual = result['actual']
+        predictions = result['predictions']
+        min_len = min(len(actual), len(test_dates), len(predictions))
+        actual = actual[:min_len]
+        predictions = predictions[:min_len]
+        dates = test_dates[:min_len]
+        errors = predictions - actual
+        metrics = compute_regression_metrics(actual, predictions)
+        print_bias_diagnostics(display_name, dates, actual, predictions)
+        
+        plot_model_prediction_vs_actual(model_name, display_name, actual, predictions, metrics)
+        plot_model_time_series(model_name, display_name, dates, actual, predictions, metrics)
+        plot_model_error_distribution(model_name, display_name, errors)
+        plot_model_feature_importance(model_name, display_name, result['importance'])
 
 
 def plot_1_data_overview(df):
@@ -120,73 +444,51 @@ def plot_1_data_overview(df):
 
 def plot_2_model_comparison(df):
     """Plot 2: Model performance comparison (MAE, RMSE, MAPE)."""
-    # Train models and get predictions
-    weather_engineer = WeatherFeatureEngineer()
-    storage_engineer = StorageFeatureEngineer()
+    all_features = prepare_model_features(df)
+    train_df, test_df = split_poster_train_test(all_features)
     
-    weather_features = weather_engineer.engineer_all_weather_features(df)
-    storage_features = storage_engineer.engineer_all_storage_features(df)
-    all_features = pd.concat([df, weather_features, storage_features], axis=1)
-    
-    # Split data
-    train_size = int(len(all_features) * 0.8)
-    train_df = all_features.iloc[:train_size]
-    test_df = all_features.iloc[train_size:]
-    
-    models = {}
-    predictions = {}
-    
-    # Train models
-    for model_name in ['elastic_net', 'random_forest']:
-        pipeline = BaselinePipeline(model_name)
-        pipeline.train_final_model(train_df)
-        models[model_name] = pipeline
-        
-        X_test, y_test = pipeline.model.prepare_features(test_df)
-        pred = pipeline.model.predict(X_test)
-        predictions[model_name] = {'pred': pred, 'actual': y_test.values}
-    
-    # Calculate metrics
     from sklearn.metrics import mean_absolute_error, mean_squared_error
     
     metrics_data = []
-    for model_name, pred_data in predictions.items():
-        mae = mean_absolute_error(pred_data['actual'], pred_data['pred'])
-        rmse = np.sqrt(mean_squared_error(pred_data['actual'], pred_data['pred']))
-        mape = np.mean(np.abs((pred_data['actual'] - pred_data['pred']) / pred_data['actual'])) * 100
+    for model_name in ['elastic_net', 'random_forest']:
+        pipeline = BaselinePipeline(model_name, target_col=TARGET_COL)
+        pipeline.train_final_model(train_df)
         
-        metrics_data.append({'Model': model_name.replace('_', ' ').title(), 'MAE': mae, 'RMSE': rmse, 'MAPE': mape})
+        X_test, y_test = pipeline.model.prepare_features(test_df, target_col=TARGET_COL)
+        preds = pipeline.model.predict(X_test)
+        
+        mae = mean_absolute_error(y_test, preds)
+        rmse = np.sqrt(mean_squared_error(y_test, preds))
+        mape = np.mean(np.abs((y_test - preds) / y_test)) * 100
+        
+        metrics_data.append({'Model': model_name.replace('_', ' ').title(),
+                             'MAE': mae, 'RMSE': rmse, 'MAPE': mape})
     
     metrics_df = pd.DataFrame(metrics_data)
     
-    # Create comparison plot
     fig, axes = plt.subplots(1, 3, figsize=(14, 4))
-    
     x_pos = np.arange(len(metrics_df))
     width = 0.6
     
-    # MAE
     axes[0].bar(x_pos, metrics_df['MAE'], width, color=['#2E86AB', '#A23B72'], alpha=0.8)
     axes[0].set_ylabel('MAE ($/MMBtu)', fontweight='bold')
     axes[0].set_title('Mean Absolute Error', fontweight='bold')
     axes[0].set_xticks(x_pos)
-    axes[0].set_xticklabels(metrics_df['Model'], rotation=0)
+    axes[0].set_xticklabels(metrics_df['Model'])
     axes[0].grid(True, alpha=0.3, axis='y')
     
-    # RMSE
     axes[1].bar(x_pos, metrics_df['RMSE'], width, color=['#2E86AB', '#A23B72'], alpha=0.8)
     axes[1].set_ylabel('RMSE ($/MMBtu)', fontweight='bold')
     axes[1].set_title('Root Mean Squared Error', fontweight='bold')
     axes[1].set_xticks(x_pos)
-    axes[1].set_xticklabels(metrics_df['Model'], rotation=0)
+    axes[1].set_xticklabels(metrics_df['Model'])
     axes[1].grid(True, alpha=0.3, axis='y')
     
-    # MAPE
     axes[2].bar(x_pos, metrics_df['MAPE'], width, color=['#2E86AB', '#A23B72'], alpha=0.8)
     axes[2].set_ylabel('MAPE (%)', fontweight='bold')
     axes[2].set_title('Mean Absolute Percentage Error', fontweight='bold')
     axes[2].set_xticks(x_pos)
-    axes[2].set_xticklabels(metrics_df['Model'], rotation=0)
+    axes[2].set_xticklabels(metrics_df['Model'])
     axes[2].grid(True, alpha=0.3, axis='y')
     
     plt.tight_layout()
@@ -197,41 +499,26 @@ def plot_2_model_comparison(df):
 
 def plot_3_prediction_vs_actual(df):
     """Plot 3: Prediction vs actual scatter plots."""
-    # Train model and get predictions
-    weather_engineer = WeatherFeatureEngineer()
-    storage_engineer = StorageFeatureEngineer()
+    all_features = prepare_model_features(df)
+    train_df, test_df = split_poster_train_test(all_features)
     
-    weather_features = weather_engineer.engineer_all_weather_features(df)
-    storage_features = storage_engineer.engineer_all_storage_features(df)
-    all_features = pd.concat([df, weather_features, storage_features], axis=1)
+    from sklearn.metrics import r2_score
     
-    train_size = int(len(all_features) * 0.8)
-    train_df = all_features.iloc[:train_size]
-    test_df = all_features.iloc[train_size:]
-    
-    # Train Elastic Net
-    pipeline = BaselinePipeline('elastic_net')
+    pipeline = BaselinePipeline('elastic_net', target_col=TARGET_COL)
     pipeline.train_final_model(train_df)
     
-    X_test, y_test = pipeline.model.prepare_features(test_df)
+    X_test, y_test = pipeline.model.prepare_features(test_df, target_col=TARGET_COL)
     predictions = pipeline.model.predict(X_test)
     actual = y_test.values
     
-    # Create scatter plot
     fig, ax = plt.subplots(figsize=(8, 8))
-    
-    # Scatter plot
     ax.scatter(actual, predictions, alpha=0.6, s=30, color='#2E86AB', edgecolors='black', linewidth=0.5)
     
-    # Perfect prediction line
     min_val = min(actual.min(), predictions.min())
     max_val = max(actual.max(), predictions.max())
     ax.plot([min_val, max_val], [min_val, max_val], 'r--', linewidth=2, label='Perfect Prediction')
     
-    # Calculate R²
-    from sklearn.metrics import r2_score
     r2 = r2_score(actual, predictions)
-    
     ax.set_xlabel('Actual Price ($/MMBtu)', fontweight='bold')
     ax.set_ylabel('Predicted Price ($/MMBtu)', fontweight='bold')
     ax.set_title(f'Prediction vs Actual (R² = {r2:.3f})', fontweight='bold', fontsize=12)
@@ -246,30 +533,15 @@ def plot_3_prediction_vs_actual(df):
 
 def plot_4_time_series_predictions(df):
     """Plot 4: Time series showing actual vs predicted prices."""
-    # Train model and get predictions
-    weather_engineer = WeatherFeatureEngineer()
-    storage_engineer = StorageFeatureEngineer()
-    
-    weather_features = weather_engineer.engineer_all_weather_features(df)
-    storage_features = storage_engineer.engineer_all_storage_features(df)
-    all_features = pd.concat([df, weather_features, storage_features], axis=1)
-    
-    # Remove duplicate columns (keep first occurrence)
-    all_features = all_features.loc[:, ~all_features.columns.duplicated()]
-    
-    train_size = int(len(all_features) * 0.8)
-    train_df = all_features.iloc[:train_size]
-    test_df = all_features.iloc[train_size:]
-    
-    # Store original dates from the base dataframe
-    test_indices = test_df.index
-    test_dates = df.loc[test_indices, 'date'].values
+    all_features = prepare_model_features(df)
+    train_df, test_df = split_poster_train_test(all_features)
+    test_dates = test_df['date'].values
     
     # Train Elastic Net
-    pipeline = BaselinePipeline('elastic_net')
+    pipeline = BaselinePipeline('elastic_net', target_col=TARGET_COL)
     pipeline.train_final_model(train_df)
     
-    X_test, y_test = pipeline.model.prepare_features(test_df)
+    X_test, y_test = pipeline.model.prepare_features(test_df, target_col=TARGET_COL)
     predictions = pipeline.model.predict(X_test)
     actual = y_test.values
     
@@ -299,39 +571,22 @@ def plot_4_time_series_predictions(df):
 
 
 def plot_5_feature_importance(df):
-    """Plot 5: Feature importance from Random Forest model."""
-    # Train model and get feature importance
-    weather_engineer = WeatherFeatureEngineer()
-    storage_engineer = StorageFeatureEngineer()
+    """Plot 5: Feature importance from Elastic Net model."""
+    all_features = prepare_model_features(df)
     
-    weather_features = weather_engineer.engineer_all_weather_features(df)
-    storage_features = storage_engineer.engineer_all_storage_features(df)
-    all_features = pd.concat([df, weather_features, storage_features], axis=1)
-    
-    # Train Elastic Net (better for feature importance with many features)
-    pipeline = BaselinePipeline('elastic_net')
+    pipeline = BaselinePipeline('elastic_net', target_col=TARGET_COL)
     pipeline.train_final_model(all_features)
     
-    # Get feature importance directly from model
     try:
         model = pipeline.model.model
-        feature_names = pipeline.model.feature_names
-        
-        # Ensure feature_names is a flat list
-        if isinstance(feature_names, (list, np.ndarray)):
-            feature_names = list(feature_names)
-        else:
-            feature_names = [str(f) for f in feature_names]
+        feature_names = list(pipeline.model.feature_names)
         
         if hasattr(model, 'coef_'):
-            # Elastic Net or Linear Regression
             coef = model.coef_
-            # Flatten if needed
             if coef.ndim > 1:
                 coef = coef.flatten()
             importance = np.abs(coef)
         elif hasattr(model, 'feature_importances_'):
-            # Random Forest
             importance = model.feature_importances_
             if importance.ndim > 1:
                 importance = importance.flatten()
@@ -339,23 +594,19 @@ def plot_5_feature_importance(df):
             print("Warning: Model does not support feature importance, skipping plot 5")
             return
         
-        # Ensure same length and flatten importance
-        importance = importance.flatten() if importance.ndim > 1 else importance
         min_len = min(len(feature_names), len(importance))
         feature_names = feature_names[:min_len]
         importance = importance[:min_len]
         
-        # Create DataFrame
         importance_df = pd.DataFrame({
             'feature': feature_names,
             'importance': importance
         }).sort_values('importance', ascending=False)
         
-        # Get top features
         top_n = min(15, len(importance_df))
         top_features = importance_df.head(top_n)
     except Exception as e:
-        print(f"Warning: Could not get feature importance ({e}), skipping plot 5")
+        print(f"Warning: Could not get feature importance ({e}), skipping plot 5)")
         import traceback
         traceback.print_exc()
         return
@@ -380,35 +631,22 @@ def plot_5_feature_importance(df):
 
 def plot_6_error_distribution(df):
     """Plot 6: Distribution of prediction errors."""
-    # Train model and get predictions
-    weather_engineer = WeatherFeatureEngineer()
-    storage_engineer = StorageFeatureEngineer()
-    
-    weather_features = weather_engineer.engineer_all_weather_features(df)
-    storage_features = storage_engineer.engineer_all_storage_features(df)
-    all_features = pd.concat([df, weather_features, storage_features], axis=1)
-    
+    all_features = prepare_model_features(df)
     train_size = int(len(all_features) * 0.8)
+    if train_size == 0 or len(all_features) - train_size <= 0:
+        raise ValueError("Not enough rows for training/testing to generate posters.")
+    
     train_df = all_features.iloc[:train_size]
     test_df = all_features.iloc[train_size:]
     
-    # Train Elastic Net
-    pipeline = BaselinePipeline('elastic_net')
+    pipeline = BaselinePipeline('elastic_net', target_col=TARGET_COL)
     pipeline.train_final_model(train_df)
     
-    X_test, y_test = pipeline.model.prepare_features(test_df)
+    X_test, y_test = pipeline.model.prepare_features(test_df, target_col=TARGET_COL)
     predictions = pipeline.model.predict(X_test)
-    actual = y_test.values
+    errors = predictions - y_test.values
     
-    errors = actual - predictions
-    
-    # Flatten errors if needed
-    if errors.ndim > 1:
-        errors = errors.flatten()
-    
-    # Create histogram
     fig, ax = plt.subplots(figsize=(10, 6))
-    
     ax.hist(errors, bins=30, color='#2E86AB', alpha=0.7, edgecolor='black', linewidth=0.5)
     ax.axvline(x=0, color='red', linestyle='--', linewidth=2, label='Zero Error')
     ax.axvline(x=np.mean(errors), color='green', linestyle='--', linewidth=2, label=f'Mean: {np.mean(errors):.4f}')
@@ -426,10 +664,25 @@ def plot_6_error_distribution(df):
 
 
 def plot_7_correlation_heatmap(df):
-    """Plot 7: Correlation heatmap of key features."""
-    # Select key features for correlation
-    key_features = ['spot_price', 'hdd', 'cdd', 'storage', 'temperature', 'production']
-    available_features = [f for f in key_features if f in df.columns]
+    """Plot 7: Correlation heatmap of curated features."""
+    key_features = [
+        'spot_price', 'hdd', 'cdd', 'temperature',
+        'storage', 'production', 'gas_rigs', 'gas_mwh', 'yoy_deviation'
+    ]
+    available_features = []
+    for f in key_features:
+        if f not in df.columns:
+            continue
+        series = df[f].dropna()
+        if len(series) < 5:
+            continue
+        if series.std() == 0:
+            continue
+        available_features.append(f)
+    
+    if not available_features:
+        print("Warning: No valid features for correlation heatmap after dropping all-NaN columns.")
+        return
     
     corr_data = df[available_features].corr()
     
@@ -509,20 +762,22 @@ def main():
     print(f"Output directory: {OUTPUT_DIR}")
     print()
     
-    # Create sample data
-    print("Creating sample data...")
-    df = create_sample_data()
+    print("Loading visualization dataset (2015-01-01 to 2024-12-31)...")
+    vis_df = load_real_data()
+    print("Loading model-ready dataset via training pipeline...")
+    model_df = load_training_dataset()
     
     # Generate all plots
     print("\nGenerating plots...")
-    plot_1_data_overview(df)
-    plot_2_model_comparison(df)
-    plot_3_prediction_vs_actual(df)
-    plot_4_time_series_predictions(df)
-    plot_5_feature_importance(df)
-    plot_6_error_distribution(df)
-    plot_7_correlation_heatmap(df)
+    plot_1_data_overview(vis_df)
+    plot_2_model_comparison(model_df)
+    plot_3_prediction_vs_actual(model_df)
+    plot_4_time_series_predictions(model_df)
+    plot_5_feature_importance(model_df)
+    plot_6_error_distribution(model_df)
+    plot_7_correlation_heatmap(vis_df)
     plot_8_model_architecture()
+    generate_model_specific_posters(model_df)
     
     print("\n" + "="*50)
     print("All visualizations generated successfully!")

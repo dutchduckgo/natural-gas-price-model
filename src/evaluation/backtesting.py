@@ -18,8 +18,9 @@ class Backtester:
         self.step_size = step_size
         self.results = []
         
-    def walk_forward_validation(self, df: pd.DataFrame, model, 
-                               target_col: str = "spot_price") -> List[Dict]:
+    def walk_forward_validation(self, df: pd.DataFrame, model,
+                               target_col: str = "spot_price",
+                               debug: bool = False) -> List[Dict]:
         """
         Perform walk-forward validation.
         
@@ -27,6 +28,7 @@ class Backtester:
             df: DataFrame with features and target
             model: Model to test
             target_col: Name of target column
+            debug: When True, log sample predictions for the first folds
             
         Returns:
             List of validation results
@@ -56,17 +58,25 @@ class Backtester:
             # Make predictions
             y_pred = model.predict(X_test)
             
-            # Calculate metrics
-            mae = np.mean(np.abs(y_test - y_pred))
-            rmse = np.sqrt(np.mean((y_test - y_pred) ** 2))
-            mape = np.mean(np.abs((y_test - y_pred) / y_test)) * 100
+            # Ensure numpy arrays for consistent math
+            y_true = np.asarray(y_test)
+            y_pred = np.asarray(y_pred)
+            errors = y_pred - y_true  # positive => over-predict
+            abs_errors = np.abs(errors)
+            mae = np.mean(abs_errors)
+            rmse = np.sqrt(np.mean(errors ** 2))
+            # avoid divide-by-zero
+            denominator = np.where(np.abs(y_true) < 1e-8, 1e-8, np.abs(y_true))
+            mape = np.mean(np.abs(errors) / denominator) * 100
+            # internal sanity check
+            assert abs(np.mean(errors)) <= mae + 1e-6, "Mean error cannot exceed MAE. Check alignment."
             
             # Calculate directional accuracy
-            direction_actual = np.sign(np.diff(y_test))
+            direction_actual = np.sign(np.diff(y_true))
             direction_pred = np.sign(np.diff(y_pred))
             direction_accuracy = np.mean(direction_actual == direction_pred) * 100
             
-            results.append({
+            fold_result = {
                 "train_start": train_df.index[0],
                 "train_end": train_df.index[-1],
                 "test_start": test_df.index[0],
@@ -76,8 +86,29 @@ class Backtester:
                 "mape": mape,
                 "direction_accuracy": direction_accuracy,
                 "predictions": y_pred,
-                "actual": y_test
-            })
+                "actual": y_true,
+                "errors": errors,
+                "mean_error": float(np.mean(errors)),
+                "actual_mean": float(np.mean(y_true)),
+                "prediction_mean": float(np.mean(y_pred))
+            }
+            results.append(fold_result)
+
+            if debug and len(results) <= 2:
+                sample = test_df[['date']].copy() if 'date' in test_df.columns else pd.DataFrame()
+                sample['actual'] = y_true
+                sample['prediction'] = y_pred
+                sample['error'] = errors
+                logger.debug(
+                    "Fold %d sample:\n%s",
+                    len(results),
+                    sample.head().to_string(index=False) if not sample.empty else
+                    pd.DataFrame({
+                        'actual': y_true[:5],
+                        'prediction': y_pred[:5],
+                        'error': errors[:5]
+                    }).to_string(index=False)
+                )
         
         self.results = results
         return results

@@ -422,6 +422,15 @@ class GasModelDatabase:
                         f"DELETE FROM {table_name} WHERE date = ? AND region = ?",
                         [date_str, region]
                     )
+            elif table_name == "power_burn" and {"date", "ba"}.issubset(df.columns):
+                unique_keys = df[["date", "ba"]].drop_duplicates()
+                for _, row in unique_keys.iterrows():
+                    date_str = pd.to_datetime(row["date"]).strftime("%Y-%m-%d")
+                    ba = str(row["ba"])
+                    self.conn.execute(
+                        f"DELETE FROM {table_name} WHERE date = ? AND ba = ?",
+                        [date_str, ba]
+                    )
             
             # Insert new data
             self.conn.execute(

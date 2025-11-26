@@ -27,6 +27,7 @@ CME_API_KEY = os.getenv("CME_API_KEY", "")
 
 # Model configuration
 FORECAST_HORIZONS = [7, 14, 30]  # days
+TARGET_HORIZON_DAYS = int(os.getenv("TARGET_HORIZON_DAYS", 7))
 WALK_FORWARD_WINDOW = 252  # 1 year of trading days
 MODEL_RETRAIN_FREQUENCY = "weekly"
 
