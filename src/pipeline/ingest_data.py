@@ -11,6 +11,8 @@ from pathlib import Path
 from src.data_ingestion.eia_client import EIAClient
 from src.data_ingestion.weather_client import WeatherClient
 from src.data_ingestion.power_client import PowerGridClient
+from src.data_ingestion.cpc_client import CPCDegreeDayClient
+from src.data_ingestion.noaa_client import NOAAWeatherClient
 from src.data_ingestion.database import GasModelDatabase
 from config import RAW_DATA_DIR, PROCESSED_DATA_DIR
 
@@ -24,6 +26,8 @@ class DataIngestionPipeline:
         self.eia_client = EIAClient()
         self.weather_client = WeatherClient()
         self.power_client = PowerGridClient()
+        self.cpc_client = CPCDegreeDayClient()
+        self.noaa_client = NOAAWeatherClient()
         self.db = GasModelDatabase()
         
     def ingest_eia_data(self, start_date: str = None, end_date: str = None):
@@ -92,7 +96,7 @@ class DataIngestionPipeline:
     
     def ingest_weather_data(self, start_date: str = None, end_date: str = None):
         """
-        Ingest weather data.
+        Ingest weather data including CPC degree days.
         
         Args:
             start_date: Start date in YYYY-MM-DD format
@@ -101,7 +105,27 @@ class DataIngestionPipeline:
         logger.info("Starting weather data ingestion")
         
         try:
-            # Get weather data
+            # Get CPC degree day data (with normals and anomalies)
+            if start_date and end_date:
+                logger.info("Fetching CPC degree day data")
+                cpc_df = self.cpc_client.get_daily_with_normals(start_date, end_date)
+                if not cpc_df.empty:
+                    self.db.insert_cpc_degree_days(cpc_df)
+                    logger.info(f"Inserted {len(cpc_df)} CPC degree day records")
+            
+            # Get historical weather data from NOAA (temperature and wind speed)
+            if start_date and end_date:
+                try:
+                    logger.info("Fetching historical weather data from NOAA")
+                    noaa_df = self.noaa_client.get_aggregate_daily_weather(start_date, end_date)
+                    if not noaa_df.empty:
+                        self.db.insert_historical_weather(noaa_df)
+                        logger.info(f"Inserted {len(noaa_df)} historical weather records")
+                except Exception as e:
+                    logger.warning(f"Failed to fetch NOAA historical weather data: {e}")
+                    # Don't fail the entire ingestion if NOAA data is unavailable
+            
+            # Get other weather data (forecasts, etc.)
             weather_data = self.weather_client.get_all_weather_data(start_date, end_date)
             
             # Store in database

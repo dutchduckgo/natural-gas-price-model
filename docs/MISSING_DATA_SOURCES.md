@@ -20,19 +20,51 @@ Based on the database schema and codebase analysis, here are the data sources th
    - ✅ Earliest data: 2019-01-01 (earliest available from EIA)
    - ✅ Integrated into `power_burn` database table
 
-## ⚠️ Partially Implemented
+## ✅ Fully Implemented (Weather Data)
 
 ### Weather Data
-- ✅ Weather Forecast (NWS) - Basic implementation working
-- ❌ **CPC Degree Days** - Not yet implemented
-  - Needed for: Historical HDD/CDD data
-  - Source: Climate Prediction Center
-  - Impact: Medium (can calculate from temperature, but historical data is valuable)
+- ✅ **NWS Weather Forecast** - Forecast data (future predictions, 14-day horizon)
+  - Source: National Weather Service (NWS) API
+  - Data: Weather forecasts for next 14 days (temperature, wind, precipitation)
+  - Purpose: Used for forward-looking predictions and forecast-based features
+  - Note: This is FORECAST data (future), not historical data
+  - Integration: Stored in `weather_daily` table (forecast dates)
+  - Impact: Medium (useful for short-term forecasting, but not for historical training)
 
-- ❌ **Historical Weather Data** - Not yet implemented
-  - Needed for: Historical temperature, HDD/CDD calculations
-  - Source: NWS, NOAA, or other weather APIs
-  - Impact: Medium (forecast data is working, but historical is needed for training)
+- ✅ **CPC Degree Days** - Historical degree day data (fully implemented)
+  - Source: Climate Prediction Center population-weighted degree day products
+  - Data: Daily HDD/CDD for CONUS (2010-present)
+  - Features: Includes normals (1981-2010 climatology) and anomalies
+  - Integration: Stored in `weather_daily` table with columns: `hdd`, `cdd`, `hdd_norm`, `cdd_norm`, `hdd_anom`, `cdd_anom`
+  - Impact: High (historical degree day data for feature engineering)
+
+- ✅ **NOAA Historical Weather Data** - Historical temperature and wind data (fully implemented)
+  - Source: NOAA NCEI CDO API (GHCND dataset)
+  - Data: Daily temperature (TMAX, TMIN, TAVG) and wind speed (AWND) for CONUS
+  - Stations: 10 representative stations aggregated (Houston, New York, Los Angeles, Chicago, Boston, Atlanta, Dallas, Minneapolis, Seattle, Denver)
+  - Units: Temperature in °F, Wind speed in mph
+  - Integration: Stored in `weather_daily` table with columns: `temperature`, `wind_speed`
+  - Impact: High (historical temperature and wind data for feature engineering)
+
+### Key Differences Between Weather Data Sources:
+
+1. **NWS Forecast** (WeatherClient):
+   - **Type**: FORECAST (future predictions)
+   - **Time horizon**: Next 14 days
+   - **Use case**: Short-term forecasting, forward-looking features
+   - **Data availability**: Real-time forecasts only (no historical archive)
+
+2. **CPC Degree Days** (CPCDegreeDayClient):
+   - **Type**: HISTORICAL (past observations)
+   - **Time range**: 2010-present (daily)
+   - **Use case**: Historical HDD/CDD for model training and feature engineering
+   - **Data**: Population-weighted degree days with climatological normals and anomalies
+
+3. **NOAA Historical Weather** (NOAAWeatherClient):
+   - **Type**: HISTORICAL (past observations)
+   - **Time range**: 2010-present (daily)
+   - **Use case**: Historical temperature and wind speed for model training and feature engineering
+   - **Data**: Actual temperature and wind measurements from weather stations
 
 ## ❌ Not Implemented
 
@@ -74,13 +106,21 @@ Additional regional power data sources (EIA-930 covers all major BAs):
 ## Priority Recommendations
 
 ### High Priority (for model accuracy)
-1. **Historical Weather Data** - Needed for training models with HDD/CDD features
-   - ✅ EIA-930 Power Grid Data - **NOW IMPLEMENTED** (covers all major BAs from 2019-2025)
+1. ✅ **Historical Weather Data** - **NOW IMPLEMENTED**
+   - ✅ CPC Degree Days (HDD/CDD with normals and anomalies)
+   - ✅ NOAA Historical Weather (temperature and wind speed)
+   - ✅ EIA-930 Power Grid Data (covers all major BAs from 2019-2025)
 
 ### Medium Priority (nice to have)
-2. **CPC Degree Days** - Historical degree day data
-3. **Rig Count Data** - Supply-side indicator
-4. **Regional Power Data** (PJM, ERCOT, ISO-NE) - Regional demand patterns (EIA-930 already covers these BAs)
+2. **Rig Count Data** - Supply-side indicator
+   - Status: Database table exists but no ingestion method
+   - Source: Baker Hughes Rig Count API
+   - Impact: Medium (supply indicator, but production data may be sufficient)
+
+3. **Regional Power Data** (PJM, ERCOT, ISO-NE) - Regional demand patterns
+   - Status: Placeholder implementations
+   - Note: EIA-930 already covers these BAs, so this is lower priority
+   - Impact: Low-Medium (EIA-930 provides sufficient coverage)
 
 ### Low Priority (can add later)
 5. **Events Data** - Important for specific events but may be sparse
@@ -94,22 +134,34 @@ Additional regional power data sources (EIA-930 covers all major BAs):
 - ✅ Consumption (188 monthly records, 2010-2025)
 - ✅ LNG Exports (188 monthly records, 2010-2025)
 - ✅ Power Burn Data (EIA-930, daily from 2019-2025, all 10 major BAs)
-- ⚠️ Weather Forecast (limited, forecast only)
+- ✅ Weather Forecast (NWS, forecast data for next 14 days - forward-looking only)
+- ✅ **CPC Degree Days** (daily HDD/CDD with normals and anomalies, 2010-present - historical)
+- ✅ **NOAA Historical Weather** (daily temperature and wind speed, aggregated CONUS, 2010-present - historical)
 
 **Missing for optimal performance:**
-- ❌ Historical weather/degree days (needed for HDD/CDD features in training)
-- ❌ Rig count data (supply indicator)
+- ⚠️ Rig count data (supply indicator) - Optional, production data may be sufficient
 
 ## Next Steps
 
-If you want to improve model accuracy, prioritize:
-1. **Historical Weather Data** - Needed for proper HDD/CDD features in training data
-2. **Rig Count Data** - Supply indicator
-3. **CPC Degree Days** - Historical degree day data for feature engineering
+**Completed:**
+1. ✅ **Historical Weather Data** - Fully implemented
+   - CPC Degree Days (HDD/CDD with normals and anomalies)
+   - NOAA Historical Weather (temperature and wind speed)
+2. ✅ **CPC Degree Days** - Fully implemented
+
+**Optional improvements:**
+1. **Rig Count Data** - Supply indicator (optional, production data may be sufficient)
+2. **Regional Power Data** (PJM, ERCOT, ISO-NE) - Lower priority since EIA-930 covers these BAs
+3. **Events Data** - LNG terminal outages, pipeline disruptions (manual tracking or FERC/DOE sources)
 
 **Current Status:**
 - ✅ Core EIA data: 2010-2025 (15+ years)
 - ✅ Power burn data: 2019-2025 (6+ years, all major BAs)
-- The current dataset is sufficient to train working models with good accuracy
-- Adding historical weather data would enable proper HDD/CDD feature engineering for the full training period
+- ✅ **Weather data: 2010-present (15+ years)**
+  - CPC Degree Days (HDD/CDD with normals and anomalies)
+  - NOAA Historical Weather (temperature and wind speed)
+- ✅ **The dataset is now comprehensive and sufficient to train high-accuracy models with full feature engineering**
+  - All core fundamentals covered (prices, storage, production, consumption, LNG exports)
+  - Power burn data from all major balancing authorities
+  - Complete historical weather data for HDD/CDD and temperature-based features
 

@@ -85,12 +85,25 @@ class GasModelDatabase:
             region VARCHAR(50),
             hdd DECIMAL(8,2),
             cdd DECIMAL(8,2),
+            hdd_norm DECIMAL(8,2),
+            cdd_norm DECIMAL(8,2),
+            hdd_anom DECIMAL(8,2),
+            cdd_anom DECIMAL(8,2),
             hdd_norm_delta DECIMAL(8,2),
             cdd_norm_delta DECIMAL(8,2),
             temperature DECIMAL(6,2),
             wind_speed DECIMAL(6,2),
             PRIMARY KEY (date, region)
         );
+        
+        -- Add new columns if they don't exist (for existing databases)
+        -- This is idempotent - will not error if columns already exist
+        ALTER TABLE weather_daily ADD COLUMN IF NOT EXISTS hdd_norm DECIMAL(8,2);
+        ALTER TABLE weather_daily ADD COLUMN IF NOT EXISTS cdd_norm DECIMAL(8,2);
+        ALTER TABLE weather_daily ADD COLUMN IF NOT EXISTS hdd_anom DECIMAL(8,2);
+        ALTER TABLE weather_daily ADD COLUMN IF NOT EXISTS cdd_anom DECIMAL(8,2);
+        ALTER TABLE weather_daily ADD COLUMN IF NOT EXISTS temperature DECIMAL(6,2);
+        ALTER TABLE weather_daily ADD COLUMN IF NOT EXISTS wind_speed DECIMAL(6,2);
         
         -- Rigs table (weekly grain)
         CREATE TABLE IF NOT EXISTS rigs_weekly (
@@ -175,6 +188,99 @@ class GasModelDatabase:
                 )
         
         self._insert_data("weather_daily", df)
+    
+    def insert_cpc_degree_days(self, df: pd.DataFrame):
+        """
+        Insert or upsert CPC daily HDD/CDD (+ normals/anomalies) into weather_daily.
+        
+        Args:
+            df: DataFrame with columns: date, region, hdd, cdd, hdd_norm, cdd_norm, hdd_anom, cdd_anom
+        """
+        if df.empty:
+            logger.warning("No CPC degree day data to insert")
+            return
+        
+        # Ensure required columns exist
+        required_cols = ['date', 'region', 'hdd', 'cdd']
+        if not all(col in df.columns for col in required_cols):
+            missing = [col for col in required_cols if col not in df.columns]
+            logger.error(f"Missing required columns: {missing}")
+            raise ValueError(f"DataFrame must contain columns: {required_cols}")
+        
+        # Remove existing rows with same primary keys
+        if {"date", "region"}.issubset(df.columns):
+            unique_keys = df[["date", "region"]].drop_duplicates()
+            for _, row in unique_keys.iterrows():
+                date_value = pd.to_datetime(row["date"]).strftime("%Y-%m-%d")
+                self.conn.execute(
+                    "DELETE FROM weather_daily WHERE date = ? AND region = ?",
+                    (date_value, row["region"])
+                )
+        
+        self._insert_data("weather_daily", df)
+    
+    def insert_historical_weather(self, df: pd.DataFrame):
+        """
+        Insert or upsert historical temperature and wind into weather_daily.
+        
+        Merges with existing rows on (date, region) without dropping other columns.
+        
+        Args:
+            df: DataFrame with columns: date, region (optional, defaults to 'CONUS'), 
+                temperature, wind_speed
+        """
+        if df.empty:
+            logger.warning("No historical weather data to insert")
+            return
+        
+        # Ensure required columns exist
+        required_cols = ['date', 'temperature', 'wind_speed']
+        if not all(col in df.columns for col in required_cols):
+            missing = [col for col in required_cols if col not in df.columns]
+            logger.error(f"Missing required columns: {missing}")
+            raise ValueError(f"DataFrame must contain columns: {required_cols}")
+        
+        # Add region column if not present (default to CONUS)
+        if 'region' not in df.columns:
+            df = df.copy()
+            df['region'] = 'CONUS'
+        
+        # For each (date, region) combination, update temperature and wind_speed
+        # We'll use an UPDATE approach to preserve existing columns
+        for _, row in df.iterrows():
+            date_value = pd.to_datetime(row["date"]).strftime("%Y-%m-%d")
+            region = row["region"]
+            temperature = row["temperature"]
+            wind_speed = row["wind_speed"]
+            
+            # Check if row exists
+            existing = self.conn.execute(
+                "SELECT COUNT(*) FROM weather_daily WHERE date = ? AND region = ?",
+                (date_value, region)
+            ).fetchone()[0]
+            
+            if existing > 0:
+                # Update existing row
+                self.conn.execute(
+                    """
+                    UPDATE weather_daily 
+                    SET temperature = ?, wind_speed = ?
+                    WHERE date = ? AND region = ?
+                    """,
+                    (temperature, wind_speed, date_value, region)
+                )
+            else:
+                # Insert new row with minimal required columns
+                # Other columns will be NULL
+                self.conn.execute(
+                    """
+                    INSERT INTO weather_daily (date, region, temperature, wind_speed)
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    (date_value, region, temperature, wind_speed)
+                )
+        
+        logger.info(f"Inserted/updated {len(df)} historical weather records")
     
     def insert_rigs(self, df: pd.DataFrame):
         """Insert rigs data."""
