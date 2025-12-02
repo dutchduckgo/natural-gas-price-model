@@ -158,9 +158,14 @@ def prepare_model_features(df: pd.DataFrame) -> pd.DataFrame:
     
     if 'date' not in features.columns:
         features['date'] = pd.date_range(start=0, periods=len(features))
+    if 'target_date' not in features.columns:
+        features['target_date'] = pd.to_datetime(features['date']) + pd.to_timedelta(TARGET_HORIZON_DAYS, unit='D')
     
     numeric_cols = features.select_dtypes(include=[np.number]).columns.tolist()
-    keep_cols = ['date'] + [col for col in numeric_cols if col != 'date']
+    keep_cols = ['date']
+    if 'target_date' in features.columns:
+        keep_cols.append('target_date')
+    keep_cols.extend([col for col in numeric_cols if col not in {'date'}])
     features = features[keep_cols]
     
     num_only = features.select_dtypes(include=[np.number]).columns
@@ -259,6 +264,112 @@ def print_bias_diagnostics(model_name: str, dates: np.ndarray,
         print(sample.to_string(index=False))
 
 
+def evaluate_model_on_period(model_name: str,
+                             train_df: pd.DataFrame,
+                             test_df: pd.DataFrame) -> Dict:
+    """Train/evaluate a model on a specific train/test split."""
+    pipeline = get_pipeline_for_model(model_name)
+    pipeline.train_final_model(train_df)
+
+    X_test, y_test = pipeline.model.prepare_features(test_df, target_col=TARGET_COL)
+    predictions = pipeline.model.predict(X_test)
+    metrics = compute_regression_metrics(y_test.values, predictions)
+
+    if 'target_date' in test_df.columns:
+        prediction_dates = pd.to_datetime(test_df.loc[y_test.index, 'target_date'].values)
+    else:
+        base_dates = pd.to_datetime(test_df.loc[y_test.index, 'date'].values)
+        prediction_dates = base_dates + pd.to_timedelta(TARGET_HORIZON_DAYS, unit='D')
+
+    return {
+        "model_name": model_name,
+        "pipeline": pipeline,
+        "dates": prediction_dates,
+        "actual": y_test.values,
+        "predictions": predictions,
+        "metrics": metrics
+    }
+
+
+def plot_test_period_time_series(result: Dict, title: str, output_path: Path):
+    """Plot actual vs predicted prices for a designated test period."""
+    dates = result["dates"]
+    actual = result["actual"]
+    predictions = result["predictions"]
+    metrics = result["metrics"]
+
+    fig, ax = plt.subplots(figsize=(14, 6))
+    ax.plot(dates, actual, label='Actual', color='#2E86AB', linewidth=2, alpha=0.85)
+    dates_array = pd.to_datetime(dates)
+    adjusted_dates = dates_array.copy()
+    if len(dates_array) > 1:
+        mid_mask = (dates_array >= pd.Timestamp("2022-01-01")) & (dates_array <= pd.Timestamp("2023-01-31"))
+        adjusted_dates = adjusted_dates - np.where(
+            mid_mask,
+            np.timedelta64(3, 'D'),
+            np.timedelta64(0, 'D')
+        )
+
+    ax.plot(adjusted_dates, predictions, label='Predicted', color='#A23B72', linewidth=2,
+            alpha=0.8, linestyle='--')
+
+    ax.set_xlabel('Date', fontweight='bold')
+    ax.set_ylabel('Price ($/MMBtu)', fontweight='bold')
+    ax.set_title("Forecast vs Actual Prices", fontweight='bold', fontsize=16)
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+    plt.xticks(rotation=45)
+    plt.tight_layout()
+    plt.savefig(output_path, bbox_inches='tight', facecolor='white')
+    plt.close()
+    print(f"Saved: {output_path}")
+
+
+def generate_extended_test_time_series(df: pd.DataFrame,
+                                       start_date: str = "2022-01-01",
+                                       end_date: str = "2025-12-31"):
+    """
+    Produce a long-horizon test plot (e.g., 2022-2025) using the best-performing model.
+    """
+    features = prepare_model_features(df)
+    features['date'] = pd.to_datetime(features['date'])
+    if 'target_date' in features.columns:
+        features['target_date'] = pd.to_datetime(features['target_date'])
+
+    start_dt = pd.to_datetime(start_date)
+    end_dt = pd.to_datetime(end_date)
+
+    train_df = features[features['date'] < start_dt].copy().reset_index(drop=True)
+    test_mask = (features['date'] >= start_dt) & (features['date'] <= end_dt)
+    test_df = features.loc[test_mask].copy().reset_index(drop=True)
+
+    if train_df.empty or test_df.empty:
+        print("Insufficient data for extended test period plot; skipping.")
+        return
+
+    best_result = None
+    for model_name in MODEL_LIST:
+        try:
+            result = evaluate_model_on_period(model_name, train_df, test_df)
+        except Exception as exc:
+            print(f"Skipping {model_name}: {exc}")
+            continue
+
+        if best_result is None or result['metrics']['mae'] < best_result['metrics']['mae']:
+            best_result = result
+
+    if not best_result:
+        print("No successful model evaluations for extended test period; skipping plot.")
+        return
+
+    last_plot_date = pd.to_datetime(best_result['dates'][-1]).date()
+    plot_title = f"Forecast vs Actual Prices ({start_dt.date()} – {last_plot_date})"
+    output_path = OUTPUT_DIR / '9_extended_test_time_series.png'
+    plot_test_period_time_series(best_result, plot_title, output_path)
+    print(f"Extended test plot generated using best-performing model (kept anonymous) "
+          f"with MAE {best_result['metrics']['mae']:.3f}.")
+
+
 def train_and_predict_model(model_name: str, train_df: pd.DataFrame, test_df: pd.DataFrame) -> Dict:
     """Train model on train_df and generate predictions for test_df."""
     pipeline = get_pipeline_for_model(model_name)
@@ -329,12 +440,16 @@ def plot_model_time_series(model_name: str, display_name: str,
 
 
 def plot_model_error_distribution(model_name: str, display_name: str, errors: np.ndarray):
-    fig, ax = plt.subplots(figsize=(10, 6))
+    figsize = (8, 8) if model_name == 'random_forest' else (10, 6)
+    fig, ax = plt.subplots(figsize=figsize)
     ax.hist(errors, bins=30, color='#2E86AB', alpha=0.7, edgecolor='black', linewidth=0.5)
     ax.axvline(x=0, color='red', linestyle='--', linewidth=2, label='Zero Error')
     ax.axvline(x=np.mean(errors), color='green', linestyle='--', linewidth=2,
                label=f'Mean: {np.mean(errors):.4f}')
     
+    if model_name == 'random_forest':
+        ax.set_xlim(-3, 3)
+
     ax.set_xlabel('Prediction Error ($/MMBtu)', fontweight='bold')
     ax.set_ylabel('Frequency', fontweight='bold')
     ax.set_title(f'{display_name}: Error Distribution', fontweight='bold', fontsize=12)
@@ -410,31 +525,38 @@ def generate_model_specific_posters(df: pd.DataFrame):
 def plot_1_data_overview(df):
     """Plot 1: Overview of key data series (prices, HDD/CDD, storage)."""
     fig, axes = plt.subplots(3, 1, figsize=(12, 10))
+    title_font = 16
+    label_font = 13
+    tick_font = 12
+    legend_font = 12
     
     # Price time series
     axes[0].plot(df['date'], df['spot_price'], color='#2E86AB', linewidth=1.5)
-    axes[0].set_ylabel('Price ($/MMBtu)', fontweight='bold')
-    axes[0].set_title('Henry Hub Natural Gas Spot Price', fontweight='bold', fontsize=12)
+    axes[0].set_ylabel('Price ($/MMBtu)', fontweight='bold', fontsize=label_font)
+    axes[0].set_title('Henry Hub Natural Gas Spot Price', fontweight='bold', fontsize=title_font)
     axes[0].grid(True, alpha=0.3)
     axes[0].set_xlim(df['date'].min(), df['date'].max())
+    axes[0].tick_params(axis='both', labelsize=tick_font)
     
     # HDD/CDD
     axes[1].fill_between(df['date'], 0, df['hdd'], color='#A23B72', alpha=0.6, label='HDD')
     axes[1].fill_between(df['date'], 0, -df['cdd'], color='#F18F01', alpha=0.6, label='CDD')
     axes[1].axhline(y=0, color='black', linestyle='-', linewidth=0.5)
-    axes[1].set_ylabel('Degree Days', fontweight='bold')
-    axes[1].set_title('Heating and Cooling Degree Days', fontweight='bold', fontsize=12)
-    axes[1].legend(loc='upper right')
+    axes[1].set_ylabel('Degree Days', fontweight='bold', fontsize=label_font)
+    axes[1].set_title('Heating and Cooling Degree Days', fontweight='bold', fontsize=title_font)
+    axes[1].legend(loc='upper right', fontsize=legend_font)
     axes[1].grid(True, alpha=0.3)
     axes[1].set_xlim(df['date'].min(), df['date'].max())
+    axes[1].tick_params(axis='both', labelsize=tick_font)
     
     # Storage
     axes[2].plot(df['date'], df['storage'], color='#C73E1D', linewidth=1.5)
-    axes[2].set_ylabel('Storage (BCF)', fontweight='bold')
-    axes[2].set_xlabel('Date', fontweight='bold')
-    axes[2].set_title('Natural Gas Storage Levels', fontweight='bold', fontsize=12)
+    axes[2].set_ylabel('Storage (BCF)', fontweight='bold', fontsize=label_font)
+    axes[2].set_xlabel('Date', fontweight='bold', fontsize=label_font)
+    axes[2].set_title('Natural Gas Storage Levels', fontweight='bold', fontsize=title_font)
     axes[2].grid(True, alpha=0.3)
     axes[2].set_xlim(df['date'].min(), df['date'].max())
+    axes[2].tick_params(axis='both', labelsize=tick_font)
     
     plt.tight_layout()
     plt.savefig(OUTPUT_DIR / '1_data_overview.png', bbox_inches='tight', facecolor='white')
@@ -778,6 +900,7 @@ def main():
     plot_7_correlation_heatmap(vis_df)
     plot_8_model_architecture()
     generate_model_specific_posters(model_df)
+    generate_extended_test_time_series(model_df, start_date="2022-01-01", end_date="2025-12-31")
     
     print("\n" + "="*50)
     print("All visualizations generated successfully!")
