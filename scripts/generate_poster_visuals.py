@@ -29,8 +29,9 @@ from src.models.tree_models import TreeModelPipeline
 from src.data_ingestion.database import GasModelDatabase
 from src.pipeline.train_baseline import ModelTrainingPipeline
 from src.feature_engineering.price_features import PriceFeatureEngineer
-from config import TARGET_HORIZON_DAYS
-from src.feature_engineering.price_features import PriceFeatureEngineer
+from src.feature_engineering.regime_features import RegimeFeatureEngineer
+from src.models.regime_models import RegimeAwareTrainer
+from config import TARGET_HORIZON_DAYS, REGIME_CONFIG
 
 # Set style for publication-quality figures
 plt.style.use('seaborn-v0_8-whitegrid')
@@ -56,6 +57,20 @@ MODEL_DISPLAY_NAMES = {
 }
 TARGET_COL = 'spot_price_target'
 PRICE_ENGINEER = PriceFeatureEngineer()
+# Initialize regime feature engineer if enabled
+REGIME_ENABLED = REGIME_CONFIG.get("enabled", False)
+if REGIME_ENABLED:
+    regime_feature_config = {
+        "volatility_window": REGIME_CONFIG.get("volatility_window", 20),
+        "price_window": REGIME_CONFIG.get("price_window", 60),
+        "regime_method": REGIME_CONFIG.get("regime_method", "volatility"),
+        "n_regimes": REGIME_CONFIG.get("n_regimes", 3)
+    }
+    REGIME_ENGINEER = RegimeFeatureEngineer(config=regime_feature_config)
+    REGIME_TRAINER = RegimeAwareTrainer(config=REGIME_CONFIG)
+else:
+    REGIME_ENGINEER = None
+    REGIME_TRAINER = None
 POSTER_TEST_WINDOW = 252  # ~1 trading year
 POSTER_MAX_TRAIN_WINDOW = 1500  # cap to maintain regime relevance
 
@@ -154,6 +169,13 @@ def prepare_model_features(df: pd.DataFrame) -> pd.DataFrame:
     features = features.loc[:, ~features.columns.duplicated()]
     features = ensure_target_column(features)
     features = PRICE_ENGINEER.transform(features)
+    
+    # Apply regime feature engineering if enabled
+    if REGIME_ENABLED and REGIME_ENGINEER is not None:
+        if 'spot_price' in features.columns:
+            features = REGIME_ENGINEER.transform(features)
+            print("Applied regime-aware feature engineering")
+    
     features = features.sort_values('date').reset_index(drop=True)
     
     if 'date' not in features.columns:
@@ -373,7 +395,14 @@ def generate_extended_test_time_series(df: pd.DataFrame,
 def train_and_predict_model(model_name: str, train_df: pd.DataFrame, test_df: pd.DataFrame) -> Dict:
     """Train model on train_df and generate predictions for test_df."""
     pipeline = get_pipeline_for_model(model_name)
-    pipeline.train_final_model(train_df)
+    
+    # Compute sample weights if regime-aware training is enabled
+    sample_weight = None
+    if REGIME_ENABLED and REGIME_TRAINER is not None:
+        if REGIME_CONFIG.get("use_sample_weighting", True):
+            sample_weight = REGIME_TRAINER.get_sample_weights(train_df)
+    
+    pipeline.train_final_model(train_df, sample_weight=sample_weight)
     
     X_test, y_test = pipeline.model.prepare_features(test_df, target_col=TARGET_COL)
     predictions = pipeline.model.predict(X_test)
@@ -697,7 +726,14 @@ def plot_5_feature_importance(df):
     all_features = prepare_model_features(df)
     
     pipeline = BaselinePipeline('elastic_net', target_col=TARGET_COL)
-    pipeline.train_final_model(all_features)
+    
+    # Compute sample weights if regime-aware training is enabled
+    sample_weight = None
+    if REGIME_ENABLED and REGIME_TRAINER is not None:
+        if REGIME_CONFIG.get("use_sample_weighting", True):
+            sample_weight = REGIME_TRAINER.get_sample_weights(all_features)
+    
+    pipeline.train_final_model(all_features, sample_weight=sample_weight)
     
     try:
         model = pipeline.model.model

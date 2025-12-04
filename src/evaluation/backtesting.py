@@ -13,10 +13,12 @@ logger = logging.getLogger(__name__)
 class Backtester:
     """Backtesting framework for natural gas price models."""
     
-    def __init__(self, window_size: int = None, step_size: int = 21):
+    def __init__(self, window_size: int = None, step_size: int = 21, track_regimes: bool = False):
         self.window_size = window_size or WALK_FORWARD_WINDOW
         self.step_size = step_size
+        self.track_regimes = track_regimes
         self.results = []
+        self.regime_performance = {}  # Track performance by regime
         
     def walk_forward_validation(self, df: pd.DataFrame, model,
                                target_col: str = "spot_price",
@@ -92,6 +94,29 @@ class Backtester:
                 "actual_mean": float(np.mean(y_true)),
                 "prediction_mean": float(np.mean(y_pred))
             }
+            
+            # Track regime-specific performance if enabled and regime features exist
+            if self.track_regimes and 'regime_label' in test_df.columns:
+                # Ensure we have the same length arrays
+                regime_labels = test_df['regime_label'].values
+                if len(regime_labels) == len(errors):
+                    for regime in np.unique(regime_labels):
+                        if pd.isna(regime):
+                            continue
+                        regime_mask = (regime_labels == regime)
+                        if regime_mask.sum() > 0:
+                            regime_errors = errors[regime_mask]
+                            regime_key = f"regime_{int(regime)}"
+                            if regime_key not in self.regime_performance:
+                                self.regime_performance[regime_key] = {
+                                    "mae": [],
+                                    "rmse": [],
+                                    "count": []
+                                }
+                            self.regime_performance[regime_key]["mae"].append(float(np.mean(np.abs(regime_errors))))
+                            self.regime_performance[regime_key]["rmse"].append(float(np.sqrt(np.mean(regime_errors ** 2))))
+                            self.regime_performance[regime_key]["count"].append(int(regime_mask.sum()))
+            
             results.append(fold_result)
 
             if debug and len(results) <= 2:
@@ -141,6 +166,32 @@ class Backtester:
         }
         
         return metrics
+    
+    def get_regime_performance_summary(self) -> pd.DataFrame:
+        """
+        Get performance summary by regime.
+        
+        Returns:
+            DataFrame with columns: regime, mae_mean, rmse_mean, total_samples
+        """
+        if not self.regime_performance:
+            return pd.DataFrame()
+        
+        summary = []
+        for regime_key, metrics in self.regime_performance.items():
+            regime_num = regime_key.replace("regime_", "")
+            mae_mean = np.mean(metrics["mae"]) if metrics["mae"] else np.nan
+            rmse_mean = np.mean(metrics["rmse"]) if metrics["rmse"] else np.nan
+            total_samples = sum(metrics["count"]) if metrics["count"] else 0
+            
+            summary.append({
+                "regime": int(regime_num),
+                "mae_mean": mae_mean,
+                "rmse_mean": rmse_mean,
+                "total_samples": total_samples
+            })
+        
+        return pd.DataFrame(summary).sort_values("regime")
     
     def plot_performance(self, save_path: str = None):
         """
@@ -216,9 +267,10 @@ class Backtester:
 class ModelComparison:
     """Compare multiple models."""
     
-    def __init__(self):
+    def __init__(self, track_regimes: bool = False):
         self.models = {}
         self.results = {}
+        self.track_regimes = track_regimes
         
     def add_model(self, name: str, model):
         """Add model to comparison."""
@@ -240,8 +292,8 @@ class ModelComparison:
         for name, model in self.models.items():
             logger.info(f"Evaluating model: {name}")
             
-            # Create backtester
-            backtester = Backtester()
+            # Create backtester with regime tracking if enabled
+            backtester = Backtester(track_regimes=self.track_regimes)
             
             # Run backtesting
             results = backtester.walk_forward_validation(df, model, target_col)

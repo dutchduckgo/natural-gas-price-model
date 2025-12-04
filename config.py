@@ -87,6 +87,23 @@ LIGHTGBM_PARAMS = {
 EVALUATION_METRICS = ["mae", "mape", "rmse", "r2"]
 QUANTILE_LEVELS = [0.1, 0.5, 0.9]  # P10, P50, P90
 
+# Regime-aware modeling configuration
+REGIME_CONFIG = {
+    "enabled": os.getenv("REGIME_ENABLED", "True").lower() == "true",  # Enable by default for poster generation
+    "regime_method": os.getenv("REGIME_METHOD", "volatility"),  # "volatility", "price_level", or "kmeans"
+    "volatility_window": int(os.getenv("REGIME_VOLATILITY_WINDOW", 20)),
+    "price_window": int(os.getenv("REGIME_PRICE_WINDOW", 60)),
+    "n_regimes": int(os.getenv("REGIME_N_REGIMES", 3)),
+    "use_sample_weighting": os.getenv("REGIME_USE_SAMPLE_WEIGHTING", "True").lower() == "true",
+    "recency_decay_rate": float(os.getenv("REGIME_RECENCY_DECAY", 0.995)),
+    "volatility_weight_multipliers": {
+        0: float(os.getenv("REGIME_VOL_WEIGHT_LOW", 0.8)),   # Low volatility
+        1: float(os.getenv("REGIME_VOL_WEIGHT_MED", 1.0)),   # Medium volatility
+        2: float(os.getenv("REGIME_VOL_WEIGHT_HIGH", 1.5))   # High volatility
+    },
+    "transition_weight_multiplier": float(os.getenv("REGIME_TRANSITION_WEIGHT", 1.2))
+}
+
 # Logging configuration
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
 LOG_FILE = LOG_DIR / "gas_model.log"

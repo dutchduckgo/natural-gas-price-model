@@ -17,7 +17,9 @@ from src.data_ingestion.database import GasModelDatabase
 from src.feature_engineering.weather_features import WeatherFeatureEngineer
 from src.feature_engineering.storage_features import StorageFeatureEngineer
 from src.feature_engineering.price_features import PriceFeatureEngineer
-from config import MODEL_DIR, RESULTS_DIR, TARGET_HORIZON_DAYS
+from src.feature_engineering.regime_features import RegimeFeatureEngineer
+from src.models.regime_models import RegimeAwareTrainer
+from config import MODEL_DIR, RESULTS_DIR, TARGET_HORIZON_DAYS, REGIME_CONFIG
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +37,22 @@ class ModelTrainingPipeline:
         self.price_engineer = PriceFeatureEngineer()
         self.target_horizon = target_horizon
         self.target_col = target_col
+        
+        # Regime-aware modeling components (only if enabled)
+        self.regime_enabled = REGIME_CONFIG.get("enabled", False)
+        if self.regime_enabled:
+            regime_feature_config = {
+                "volatility_window": REGIME_CONFIG.get("volatility_window", 20),
+                "price_window": REGIME_CONFIG.get("price_window", 60),
+                "regime_method": REGIME_CONFIG.get("regime_method", "volatility"),
+                "n_regimes": REGIME_CONFIG.get("n_regimes", 3)
+            }
+            self.regime_engineer = RegimeFeatureEngineer(config=regime_feature_config)
+            self.regime_trainer = RegimeAwareTrainer(config=REGIME_CONFIG)
+            logger.info("Regime-aware modeling enabled")
+        else:
+            self.regime_engineer = None
+            self.regime_trainer = None
         
     def get_training_data(self, start_date: str = None, end_date: str = None) -> pd.DataFrame:
         """
@@ -106,6 +124,12 @@ class ModelTrainingPipeline:
             df = self.price_engineer.transform(df)
             logger.info("Added autoregressive price features")
         
+        # Regime-aware feature engineering (if enabled)
+        if self.regime_enabled and self.regime_engineer is not None:
+            if 'spot_price' in df.columns:
+                df = self.regime_engineer.transform(df)
+                logger.info("Added regime-aware features")
+        
         # Remove duplicate columns that can arise from repeated feature merges
         if df.columns.duplicated().any():
             dup_count = df.columns.duplicated().sum()
@@ -134,47 +158,61 @@ class ModelTrainingPipeline:
     
     def train_baseline_models(self, df: pd.DataFrame):
         """
-        Train baseline models.
+        Train baseline models with optional regime-aware sample weighting.
         
         Args:
             df: Training data
         """
         logger.info("Training baseline models")
         
+        # Compute sample weights if regime-aware training is enabled
+        sample_weight = None
+        if self.regime_enabled and self.regime_trainer is not None:
+            if REGIME_CONFIG.get("use_sample_weighting", True):
+                sample_weight = self.regime_trainer.get_sample_weights(df)
+                logger.info(f"Using regime-aware sample weighting (mean weight: {sample_weight.mean():.3f})")
+        
         # Elastic Net model
         elastic_net = BaselinePipeline("elastic_net", target_col=self.target_col)
-        elastic_net.train_final_model(df)
+        elastic_net.train_final_model(df, sample_weight=sample_weight)
         self.models["elastic_net"] = elastic_net.model
         
         # Linear Regression model
         linear = BaselinePipeline("linear", target_col=self.target_col)
-        linear.train_final_model(df)
+        linear.train_final_model(df, sample_weight=sample_weight)
         self.models["linear"] = linear.model
         
         # Random Forest model
         rf = BaselinePipeline("random_forest", target_col=self.target_col)
-        rf.train_final_model(df)
+        rf.train_final_model(df, sample_weight=sample_weight)
         self.models["random_forest"] = rf.model
         
         logger.info("Baseline models trained successfully")
     
     def train_tree_models(self, df: pd.DataFrame):
         """
-        Train tree-based models.
+        Train tree-based models with optional regime-aware sample weighting.
         
         Args:
             df: Training data
         """
         logger.info("Training tree-based models")
         
+        # Compute sample weights if regime-aware training is enabled
+        sample_weight = None
+        if self.regime_enabled and self.regime_trainer is not None:
+            if REGIME_CONFIG.get("use_sample_weighting", True):
+                sample_weight = self.regime_trainer.get_sample_weights(df)
+                logger.info(f"Using regime-aware sample weighting (mean weight: {sample_weight.mean():.3f})")
+        
         # XGBoost model
         xgb = TreeModelPipeline("xgboost", target_col=self.target_col)
-        xgb.train_final_model(df)
+        xgb.train_final_model(df, sample_weight=sample_weight)
         self.models["xgboost"] = xgb.model
         
         # LightGBM model
         lgb = TreeModelPipeline("lightgbm", target_col=self.target_col)
-        lgb.train_final_model(df)
+        lgb.train_final_model(df, sample_weight=sample_weight)
         self.models["lightgbm"] = lgb.model
         
         logger.info("Tree-based models trained successfully")
@@ -212,8 +250,9 @@ class ModelTrainingPipeline:
         """
         logger.info("Evaluating models")
         
-        # Create model comparison
-        comparison = ModelComparison()
+        # Create model comparison with regime tracking if enabled
+        track_regimes = self.regime_enabled and 'regime_label' in df.columns
+        comparison = ModelComparison(track_regimes=track_regimes)
         
         # Add all models
         for name, model in self.models.items():
@@ -317,6 +356,106 @@ class ModelTrainingPipeline:
         finally:
             # Close database connection
             self.db.close()
+
+
+def test_regime_aware_modeling():
+    """
+    Test regime-aware modeling with a short backtest.
+    
+    This function demonstrates regime-aware modeling by:
+    1. Loading recent data
+    2. Training models with regime features and sample weighting
+    3. Running a short backtest
+    4. Reporting overall and regime-specific metrics
+    """
+    import logging
+    from datetime import datetime, timedelta
+    
+    # Set up logging
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    )
+    
+    logger.info("=" * 60)
+    logger.info("Testing Regime-Aware Modeling")
+    logger.info("=" * 60)
+    
+    # Create pipeline
+    pipeline = ModelTrainingPipeline()
+    
+    # Get recent data (last 2 years)
+    end_date = datetime.now().strftime("%Y-%m-%d")
+    start_date = (datetime.now() - timedelta(days=365*2)).strftime("%Y-%m-%d")
+    
+    logger.info(f"Loading data from {start_date} to {end_date}")
+    df = pipeline.get_training_data(start_date, end_date)
+    
+    if df.empty:
+        logger.error("No data available for testing")
+        return
+    
+    logger.info(f"Loaded {len(df)} samples with {len(df.columns)} features")
+    
+    # Check if regime features are present
+    has_regime_features = any(col in df.columns for col in 
+                             ['regime_label', 'volatility_regime', 'price_level_regime'])
+    
+    if has_regime_features:
+        logger.info("Regime features detected:")
+        if 'regime_label' in df.columns:
+            regime_counts = df['regime_label'].value_counts().sort_index()
+            logger.info(f"  Regime label distribution:\n{regime_counts}")
+        if 'volatility_regime' in df.columns:
+            vol_counts = df['volatility_regime'].value_counts().sort_index()
+            logger.info(f"  Volatility regime distribution:\n{vol_counts}")
+    else:
+        logger.warning("No regime features found. Enable REGIME_CONFIG['enabled'] = True")
+    
+    # Train a single model for quick test (XGBoost)
+    logger.info("\nTraining XGBoost model with regime-aware features...")
+    pipeline.train_tree_models(df)
+    
+    if "xgboost" not in pipeline.models:
+        logger.error("Failed to train model")
+        return
+    
+    # Run a short backtest
+    logger.info("\nRunning short backtest...")
+    backtester = Backtester(window_size=252, step_size=21, track_regimes=has_regime_features)
+    model = pipeline.models["xgboost"]
+    
+    # Get model wrapper for backtesting
+    from src.models.tree_models import TreeModelPipeline
+    xgb_pipeline = TreeModelPipeline("xgboost", target_col=pipeline.target_col)
+    xgb_pipeline.model = model
+    
+    results = backtester.walk_forward_validation(df, xgb_pipeline, target_col=pipeline.target_col)
+    
+    # Calculate overall metrics
+    metrics = backtester.calculate_performance_metrics()
+    
+    logger.info("\n" + "=" * 60)
+    logger.info("Overall Performance Metrics")
+    logger.info("=" * 60)
+    logger.info(f"MAE: {metrics.get('mae_mean', 0):.4f} ± {metrics.get('mae_std', 0):.4f}")
+    logger.info(f"RMSE: {metrics.get('rmse_mean', 0):.4f} ± {metrics.get('rmse_std', 0):.4f}")
+    logger.info(f"MAPE: {metrics.get('mape_mean', 0):.2f}% ± {metrics.get('mape_std', 0):.2f}%")
+    logger.info(f"Direction Accuracy: {metrics.get('direction_accuracy_mean', 0):.2f}% ± "
+               f"{metrics.get('direction_accuracy_std', 0):.2f}%")
+    
+    # Report regime-specific performance if available
+    if has_regime_features and backtester.regime_performance:
+        regime_summary = backtester.get_regime_performance_summary()
+        if not regime_summary.empty:
+            logger.info("\n" + "=" * 60)
+            logger.info("Performance by Regime")
+            logger.info("=" * 60)
+            logger.info(f"\n{regime_summary.to_string(index=False)}")
+    
+    logger.info("\n" + "=" * 60)
+    logger.info("Test completed successfully!")
+    logger.info("=" * 60)
 
 
 def main():
